@@ -2,9 +2,9 @@
  * Query profiling utility for measuring and reporting time spent in the query
  * pipeline from user input to first token arrival.
  *
- * Extracted from `src/utils/queryProfiler.ts` (Claude Code source snapshot).
- * Enable by setting `PERF_PROFILE_QUERY=1` (or the original
- * `CLAUDE_CODE_PROFILE_QUERY=1`).
+ * Enable by setting `PERF_PROFILE_QUERY=1`. Produces a human-readable report
+ * (TTFT breakdown, phase bars, slow-operation warnings) and an AI-friendly
+ * JSON report via getQueryAiReport().
  *
  * Uses Node.js built-in performance hooks API for standard timing measurement.
  * Tracks each query session with detailed checkpoints for identifying
@@ -35,6 +35,14 @@
 import { logForDebugging } from './logger.js'
 import { PROFILE_QUERY_ENV_VARS, firstEnvTruthy } from './env.js'
 import { formatMs, formatTimelineLine, getPerformance } from './base.js'
+import {
+  type AiReport,
+  type Anomaly,
+  buildReport,
+  marksToCheckpoints,
+  phasesFromCheckpoints,
+  suggestForPhase,
+} from './analyze.js'
 
 // Module-level state - initialized once when the module loads
 const ENABLED = firstEnvTruthy(...PROFILE_QUERY_ENV_VARS)
@@ -214,6 +222,39 @@ export function getQueryProfileReport(): string {
   return lines.join('\n')
 }
 
+const QUERY_PHASE_DEFINITIONS: Record<string, readonly [string, string]> = {
+  'Context loading': ['query_context_loading_start', 'query_context_loading_end'],
+  Microcompact: ['query_microcompact_start', 'query_microcompact_end'],
+  Autocompact: ['query_autocompact_start', 'query_autocompact_end'],
+  'Query setup': ['query_setup_start', 'query_setup_end'],
+  'Tool schemas': [
+    'query_tool_schema_build_start',
+    'query_tool_schema_build_end',
+  ],
+  'Message normalization': [
+    'query_message_normalization_start',
+    'query_message_normalization_end',
+  ],
+  'Client creation': ['query_client_creation_start', 'query_client_creation_end'],
+  'Network TTFB': ['query_api_request_sent', 'query_first_chunk_received'],
+  'Tool execution': ['query_tool_execution_start', 'query_tool_execution_end'],
+}
+
+/**
+ * Structured phase durations for the current query (relative to baseline).
+ */
+function getQueryPhases(
+  marks: Array<{ name: string; startTime: number }>,
+  baselineTime: number,
+): ReturnType<typeof phasesFromCheckpoints> {
+  const checkpointTimes = new Map(marks.map(m => [m.name, m.startTime]))
+  return phasesFromCheckpoints(
+    QUERY_PHASE_DEFINITIONS,
+    checkpointTimes,
+    baselineTime,
+  )
+}
+
 /**
  * Get phase-based summary showing time spent in each major phase
  */
@@ -221,67 +262,17 @@ function getPhaseSummary(
   marks: Array<{ name: string; startTime: number }>,
   baselineTime: number,
 ): string {
-  const phases: Array<{ name: string; start: string; end: string }> = [
-    {
-      name: 'Context loading',
-      start: 'query_context_loading_start',
-      end: 'query_context_loading_end',
-    },
-    {
-      name: 'Microcompact',
-      start: 'query_microcompact_start',
-      end: 'query_microcompact_end',
-    },
-    {
-      name: 'Autocompact',
-      start: 'query_autocompact_start',
-      end: 'query_autocompact_end',
-    },
-    { name: 'Query setup', start: 'query_setup_start', end: 'query_setup_end' },
-    {
-      name: 'Tool schemas',
-      start: 'query_tool_schema_build_start',
-      end: 'query_tool_schema_build_end',
-    },
-    {
-      name: 'Message normalization',
-      start: 'query_message_normalization_start',
-      end: 'query_message_normalization_end',
-    },
-    {
-      name: 'Client creation',
-      start: 'query_client_creation_start',
-      end: 'query_client_creation_end',
-    },
-    {
-      name: 'Network TTFB',
-      start: 'query_api_request_sent',
-      end: 'query_first_chunk_received',
-    },
-    {
-      name: 'Tool execution',
-      start: 'query_tool_execution_start',
-      end: 'query_tool_execution_end',
-    },
-  ]
-
+  const phases = getQueryPhases(marks, baselineTime)
   const markMap = new Map(marks.map(m => [m.name, m.startTime - baselineTime]))
-
   const lines: string[] = []
   lines.push('')
   lines.push('PHASE BREAKDOWN:')
 
   for (const phase of phases) {
-    const startTime = markMap.get(phase.start)
-    const endTime = markMap.get(phase.end)
-
-    if (startTime !== undefined && endTime !== undefined) {
-      const duration = endTime - startTime
-      const bar = '█'.repeat(Math.min(Math.ceil(duration / 10), 50)) // 1 block per 10ms, max 50
-      lines.push(
-        `  ${phase.name.padEnd(22)} ${formatMs(duration).padStart(10)}ms ${bar}`,
-      )
-    }
+    const bar = '█'.repeat(Math.min(Math.ceil(phase.durationMs / 10), 50)) // 1 block per 10ms, max 50
+    lines.push(
+      `  ${phase.name.padEnd(22)} ${formatMs(phase.durationMs).padStart(10)}ms ${bar}`,
+    )
   }
 
   // Calculate pre-API overhead (everything before api_request_sent)
@@ -302,4 +293,63 @@ function getPhaseSummary(
 export function logQueryProfileReport(): void {
   if (!ENABLED) return
   logForDebugging(getQueryProfileReport())
+}
+
+/**
+ * Build the AI-friendly structured report for the current/last query.
+ * Returns null when profiling is not enabled or no checkpoints were recorded.
+ */
+export function getQueryAiReport(): AiReport | null {
+  if (!ENABLED) return null
+
+  const perf = getPerformance()
+  const marks = perf.getEntriesByType('mark')
+  if (marks.length === 0) return null
+
+  const baseline = marks[0]?.startTime ?? 0
+  const checkpoints = marksToCheckpoints(marks, name =>
+    memorySnapshots.get(name),
+  )
+  const phases = getQueryPhases(marks, baseline)
+
+  const extraAnomalies: Anomaly[] = []
+  const times = new Map(marks.map(m => [m.name, m.startTime - baseline]))
+  const apiSent = times.get('query_api_request_sent')
+  const firstChunk = times.get('query_first_chunk_received')
+
+  let summaryOverride: string | undefined
+  if (apiSent !== undefined && firstChunk !== undefined) {
+    const networkLatency = Math.max(0, firstChunk - apiSent)
+    if (networkLatency > 1000) {
+      extraAnomalies.push({
+        severity: 'critical',
+        phase: 'Network TTFB',
+        durationMs: networkLatency,
+        thresholdMs: 1000,
+        reason: 'Network latency exceeds 1000ms',
+        suggestion: suggestForPhase('Network TTFB'),
+      })
+    } else if (networkLatency > 300) {
+      extraAnomalies.push({
+        severity: 'warning',
+        phase: 'Network TTFB',
+        durationMs: networkLatency,
+        thresholdMs: 300,
+        reason: 'Network latency exceeds 300ms',
+        suggestion: suggestForPhase('Network TTFB'),
+      })
+    }
+    const preRequestPct = firstChunk > 0 ? (apiSent / firstChunk) * 100 : 0
+    summaryOverride =
+      `TTFT ${firstChunk.toFixed(1)}ms: pre-request overhead ${apiSent.toFixed(1)}ms (${preRequestPct.toFixed(1)}%), ` +
+      `network latency ${networkLatency.toFixed(1)}ms (${(100 - preRequestPct).toFixed(1)}%)`
+  }
+
+  return buildReport({
+    mode: 'query',
+    checkpoints,
+    phases,
+    extraAnomalies,
+    summaryOverride,
+  })
 }

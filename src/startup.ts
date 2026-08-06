@@ -2,14 +2,11 @@
  * Startup profiling utility for measuring and reporting time spent in various
  * initialization phases.
  *
- * Extracted from `src/utils/startupProfiler.ts` (Claude Code source snapshot).
- *
- * Two modes:
- * 1. Sampled logging: logs phase durations to a configurable analytics sink
- *    (inert by default). Sample rate 0.5%.
- * 2. Detailed profiling: `PERF_PROFILE_STARTUP=1` (or the original
- *    `CLAUDE_CODE_PROFILE_STARTUP=1`) - full report with memory snapshots,
- *    written to `<config-home>/startup-perf/<sessionId>.txt`.
+ * Enabled by `PERF_PROFILE_STARTUP=1`. Produces:
+ * - a human-readable text report with memory snapshots, written to
+ *   `<config-home>/reports/<sessionId>.txt`;
+ * - an AI-friendly JSON report (`<sessionId>.json`) with detected anomalies
+ *   and fix suggestions, for harness automation.
  *
  * Uses Node.js built-in performance hooks API for standard timing measurement.
  */
@@ -17,6 +14,12 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { logEvent } from './analytics.js'
+import {
+  type AiReport,
+  buildReport,
+  marksToCheckpoints,
+  phasesFromCheckpoints,
+} from './analyze.js'
 import { getOutputDir, getSessionId } from './config.js'
 import { PROFILE_STARTUP_ENV_VARS, firstEnvTruthy } from './env.js'
 import { logForDebugging } from './logger.js'
@@ -25,13 +28,9 @@ import { formatMs, formatTimelineLine, getPerformance } from './base.js'
 // Module-level state - decided once at module load
 const DETAILED_PROFILING = firstEnvTruthy(...PROFILE_STARTUP_ENV_VARS)
 
-// Sampling for telemetry logging: 0.5% of sessions.
-// Decision made once at startup - non-sampled sessions pay no profiling cost.
-const STATSIG_SAMPLE_RATE = 0.005
-const STATSIG_LOGGING_SAMPLED = Math.random() < STATSIG_SAMPLE_RATE
-
-// Enable profiling if either detailed mode OR sampled for telemetry
-const SHOULD_PROFILE = DETAILED_PROFILING || STATSIG_LOGGING_SAMPLED
+// Enable profiling only when explicitly requested - deterministic, no hidden
+// sampling. Disabled sessions pay no profiling cost.
+const SHOULD_PROFILE = DETAILED_PROFILING
 
 // Track memory snapshots separately (perf_hooks doesn't track memory).
 // Only used when DETAILED_PROFILING is enabled.
@@ -43,7 +42,7 @@ const SHOULD_PROFILE = DETAILED_PROFILING || STATSIG_LOGGING_SAMPLED
 // first's memory snapshot.
 const memorySnapshots: NodeJS.MemoryUsage[] = []
 
-// Phase definitions for telemetry logging: [startCheckpoint, endCheckpoint]
+// Phase definitions: [startCheckpoint, endCheckpoint]
 const PHASE_DEFINITIONS = {
   import_time: ['cli_entry', 'main_tsx_imports_loaded'],
   init_time: ['init_function_start', 'init_function_end'],
@@ -125,15 +124,23 @@ export function profileReport(): void {
   if (reported) return
   reported = true
 
-  // Log to analytics sink (sampled)
+  // Log phase durations to the analytics sink (if one is attached)
   logStartupPerf()
 
-  // Output detailed report if detailed profiling enabled
+  // Write reports when detailed profiling enabled
   if (DETAILED_PROFILING) {
     const path = getStartupPerfLogPath()
     const dir = dirname(path)
     mkdirSync(dir, { recursive: true })
     writeFileSyncFlushed(path, getReport())
+
+    const aiReport = getStartupAiReport()
+    if (aiReport) {
+      writeFileSyncFlushed(
+        join(dir, `${getSessionId()}.json`),
+        JSON.stringify(aiReport, null, 2),
+      )
+    }
 
     logForDebugging('Startup profiling report:')
     logForDebugging(getReport())
@@ -150,11 +157,9 @@ export function getStartupPerfLogPath(): string {
 
 /**
  * Log startup performance phases to the analytics sink.
- * Only logs if this session was sampled at startup.
  */
 export function logStartupPerf(): void {
-  // Only log if we were sampled (decision made at module load)
-  if (!STATSIG_LOGGING_SAMPLED) return
+  if (!SHOULD_PROFILE) return
 
   const perf = getPerformance()
   const marks = perf.getEntriesByType('mark')
@@ -183,7 +188,30 @@ export function logStartupPerf(): void {
   // Add checkpoint count for debugging
   metadata.checkpoint_count = marks.length
 
-  logEvent('tengu_startup_perf', metadata)
+  logEvent('startup_perf', metadata)
+}
+
+/**
+ * Build the AI-friendly structured report for the current startup profile.
+ * Returns null when profiling is not enabled or no checkpoints were recorded.
+ */
+export function getStartupAiReport(): AiReport | null {
+  if (!SHOULD_PROFILE) return null
+
+  const perf = getPerformance()
+  const marks = perf.getEntriesByType('mark')
+  if (marks.length === 0) return null
+
+  const checkpoints = marksToCheckpoints(
+    marks,
+    (_name, index) => memorySnapshots[index],
+  )
+  const checkpointTimes = new Map(
+    marks.map((mark, index) => [mark.name, mark.startTime]),
+  )
+  const phases = phasesFromCheckpoints(PHASE_DEFINITIONS, checkpointTimes, 0)
+
+  return buildReport({ mode: 'startup', checkpoints, phases })
 }
 
 /**

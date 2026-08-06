@@ -4,7 +4,7 @@
  *
  * Commands:
  *   demo    Run a scripted profiling demo (startup / query / headless)
- *   report  Print detailed profiling report files written by the library
+ *   report  Print profiling report files (.txt / .json) written by the library
  *   run     Run a command and produce a profile timeline + summary
  *   help    Show help
  *
@@ -20,6 +20,12 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { getOutputDir, setSessionId } from './config.js'
 import { formatMs, formatTimelineLine, getPerformance } from './base.js'
 import { formatFileSize } from './format.js'
+import {
+  type AiReport,
+  type Anomaly,
+  buildReport,
+  marksToCheckpoints,
+} from './analyze.js'
 
 const USAGE = `perf-profiler - checkpoint-based performance profiler
 
@@ -29,22 +35,22 @@ Usage:
 Commands:
   demo                 Run a scripted profiling demo.
                        Options: --startup (default) | --query | --headless
-                                --out <dir>      report output directory
+                                --json            output AI-friendly JSON report
+                                --out <dir>       report output directory
                                 --session-id <id> stable file name for reports
-  report [file ...]    Print detailed profiling report files.
-                       Options: --dir <dir>  scan a directory (*.txt, newest first)
+  report [file ...]    Print profiling report files (.txt / .json).
+                       Options: --dir <dir>  scan a directory (newest first)
+                                --json        print AI JSON reports (raw, no headers)
   run -- <cmd> [args]  Run a command and print a timeline + wall/CPU summary.
+                       Options: --json  output AI-friendly JSON report
                        The child's exit code is propagated.
   help                 Show this help.
 
 Environment:
   PERF_PROFILE_STARTUP=1        Enable detailed startup/headless profiling
-                                (alias: CLAUDE_CODE_PROFILE_STARTUP=1)
   PERF_PROFILE_QUERY=1          Enable query profiling
-                                (alias: CLAUDE_CODE_PROFILE_QUERY=1)
-  PERF_OUTPUT_DIR=<dir>         Where detailed reports are written
-                                (default: <config-home>/startup-perf)
-  PERF_CONFIG_DIR=<dir>         Config home (default: $CLAUDE_CONFIG_DIR or ~/.claude)
+  PERF_OUTPUT_DIR=<dir>         Where reports are written (default: <config-home>/reports)
+  PERF_CONFIG_DIR=<dir>         Config home (default: ~/.perf-profiler)
   PERF_DEBUG=1 or --debug       Write debug logs to stderr
 `
 
@@ -157,6 +163,7 @@ function parseFlags(
 async function cmdDemo(flags: Record<string, string | boolean>): Promise<void> {
   const mode =
     typeof flags.mode === 'string' ? flags.mode : 'startup'
+  const json = flags.json === true
   const outDir = typeof flags.out === 'string' ? flags.out : undefined
   if (outDir) {
     process.env.PERF_OUTPUT_DIR = outDir
@@ -166,19 +173,20 @@ async function cmdDemo(flags: Record<string, string | boolean>): Promise<void> {
   }
 
   if (mode === 'query') {
-    await demoQuery()
+    await demoQuery(json)
   } else if (mode === 'headless') {
-    await demoHeadless()
+    await demoHeadless(json)
   } else {
-    await demoStartup()
+    await demoStartup(json)
   }
 }
 
-async function demoStartup(): Promise<void> {
+async function demoStartup(json: boolean): Promise<void> {
   process.env.PERF_PROFILE_STARTUP = '1'
   const startup = await import('./startup.js')
 
-  // Mimic the checkpoint sequence used in Claude Code's entrypoints/main.tsx
+  // Mimic a typical CLI startup sequence: entry, module imports, settings,
+  // MCP/plugin connect, and argument parsing.
   startup.profileCheckpoint('cli_entry')
   await sleep(40)
   startup.profileCheckpoint('main_tsx_imports_loaded')
@@ -203,12 +211,18 @@ async function demoStartup(): Promise<void> {
 
   startup.profileReport()
 
+  if (json) {
+    const report = startup.getStartupAiReport()
+    console.log(report ? JSON.stringify(report, null, 2) : '{}')
+    return
+  }
+
   const path = startup.getStartupPerfLogPath()
   console.log(await readFileAsync(path))
   console.log(`\nReport written to: ${path}`)
 }
 
-async function demoQuery(): Promise<void> {
+async function demoQuery(json: boolean): Promise<void> {
   process.env.PERF_PROFILE_QUERY = '1'
   const query = await import('./query.js')
 
@@ -241,10 +255,16 @@ async function demoQuery(): Promise<void> {
   query.queryCheckpoint('query_tool_execution_end')
   query.endQueryProfile()
 
+  if (json) {
+    const report = query.getQueryAiReport()
+    console.log(report ? JSON.stringify(report, null, 2) : '{}')
+    return
+  }
+
   console.log(query.getQueryProfileReport())
 }
 
-async function demoHeadless(): Promise<void> {
+async function demoHeadless(json: boolean): Promise<void> {
   process.env.PERF_PROFILE_STARTUP = '1'
   const headless = await import('./headless.js')
   headless.setNonInteractiveSession(true)
@@ -258,6 +278,12 @@ async function demoHeadless(): Promise<void> {
   headless.headlessProfilerCheckpoint('api_request_sent')
   await sleep(180)
   headless.headlessProfilerCheckpoint('first_chunk')
+
+  if (json) {
+    const report = headless.getHeadlessAiReport()
+    console.log(report ? JSON.stringify(report, null, 2) : '{}')
+    return
+  }
 
   const metrics = headless.getHeadlessTurnMetrics()
   console.log('='.repeat(80))
@@ -275,6 +301,7 @@ async function cmdReport(
   flags: Record<string, string | boolean>,
   positionals: string[],
 ): Promise<void> {
+  const jsonOnly = flags.json === true
   const dir =
     typeof flags.dir === 'string' ? flags.dir : getOutputDir()
   const files =
@@ -293,10 +320,21 @@ async function cmdReport(
       console.error(`File not found: ${file}`)
       continue
     }
+    const isJson = file.toLowerCase().endsWith('.json')
+    const content = await readFileAsync(file)
+    if (jsonOnly) {
+      if (isJson) {
+        // Raw JSON without headers - easy to pipe into an AI agent or harness.
+        console.log(content)
+      }
+      continue
+    }
     console.log(`${'='.repeat(80)}`)
     console.log(`FILE: ${file}`)
     console.log(`${'='.repeat(80)}`)
-    console.log(await readFileAsync(file))
+    console.log(
+      isJson ? JSON.stringify(JSON.parse(content), null, 2) : content,
+    )
     console.log()
   }
 }
@@ -304,12 +342,12 @@ async function cmdReport(
 function listReportFiles(dir: string): string[] {
   if (!existsSync(dir)) return []
   return readdirSync(dir)
-    .filter(name => name.endsWith('.txt'))
+    .filter(name => name.endsWith('.txt') || name.endsWith('.json'))
     .map(name => join(dir, name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
 }
 
-async function cmdRun(rest: string[]): Promise<void> {
+async function cmdRun(rest: string[], json: boolean): Promise<void> {
   if (rest.length === 0) {
     console.error('Usage: perf-profiler run -- <command> [args...]')
     process.exitCode = 1
@@ -392,6 +430,14 @@ async function cmdRun(rest: string[]): Promise<void> {
   }
 
   const total = marks.at(-1) ? marks.at(-1)!.startTime - baseline : 0
+
+  if (json) {
+    const report = buildRunReport(command, marks, baseline, total, exitCode, finalSample)
+    console.log(JSON.stringify(report, null, 2))
+    process.exitCode = exitCode ?? 1
+    return
+  }
+
   lines.push('')
   lines.push(`Wall time:        ${formatMs(total)}ms`)
   if (finalSample) {
@@ -407,6 +453,73 @@ async function cmdRun(rest: string[]): Promise<void> {
 
   console.log(lines.join('\n'))
   process.exitCode = exitCode ?? 1
+}
+
+function buildRunReport(
+  command: string,
+  marks: Array<{ name: string; startTime: number }>,
+  baseline: number,
+  wallMs: number,
+  exitCode: number,
+  sample: ProcSample | null,
+): AiReport {
+  const checkpoints = marksToCheckpoints(
+    marks.map(mark => ({
+      name: mark.name,
+      startTime: mark.startTime - baseline,
+    })),
+  )
+  const anomalies: Anomaly[] = []
+  if (exitCode !== 0) {
+    anomalies.push({
+      severity: 'critical',
+      checkpoint: 'run_exit',
+      durationMs: wallMs,
+      thresholdMs: 0,
+      reason: `Command exited with code ${exitCode}`,
+      suggestion:
+        'Inspect the command output and error handling before optimizing performance.',
+    })
+  }
+  if (sample && sample.cpuMs > 0 && wallMs > 0) {
+    const cpuShare = (sample.cpuMs / wallMs) * 100
+    if (cpuShare < 30) {
+      anomalies.push({
+        severity: 'info',
+        phase: 'execution',
+        durationMs: wallMs - sample.cpuMs,
+        thresholdMs: wallMs * 0.7,
+        reason: `Low CPU utilization (${cpuShare.toFixed(1)}%): mostly I/O or waiting`,
+        suggestion:
+          'Look for blocking network/disk I/O, locks, or external service latency.',
+      })
+    } else if (cpuShare > 90) {
+      anomalies.push({
+        severity: 'info',
+        phase: 'execution',
+        durationMs: sample.cpuMs,
+        thresholdMs: wallMs * 0.9,
+        reason: `High CPU utilization (${cpuShare.toFixed(1)}%): compute-bound`,
+        suggestion:
+          'Optimize hot loops, caching, parallelism, or algorithmic complexity.',
+      })
+    }
+  }
+  const summaryOverride =
+    `Command "${command}" finished in ${wallMs.toFixed(1)}ms with exit code ${exitCode}` +
+    (sample
+      ? `; child CPU ${sample.cpuMs.toFixed(1)}ms, peak RSS ${formatFileSize(sample.peakRssBytes)}`
+      : '')
+  return buildReport({
+    mode: 'run',
+    checkpoints,
+    phases: [],
+    wallMs,
+    cpuMs: sample?.cpuMs,
+    exitCode,
+    extraAnomalies: anomalies,
+    summaryOverride,
+  })
 }
 
 function readFileAsync(path: string): Promise<string> {
@@ -431,6 +544,7 @@ async function main(): Promise<void> {
       startup: 'flag',
       query: 'flag',
       headless: 'flag',
+      json: 'flag',
       out: 'value',
       'session-id': 'value',
     })
@@ -443,14 +557,15 @@ async function main(): Promise<void> {
   if (command === 'report') {
     const { flags, positionals } = parseFlags(rest, {
       dir: 'value',
+      json: 'flag',
     })
     await cmdReport(flags, positionals)
     return
   }
 
   if (command === 'run') {
-    const { rest: restArgs } = parseFlags(rest, {})
-    await cmdRun(restArgs)
+    const { flags, rest: restArgs } = parseFlags(rest, { json: 'flag' })
+    await cmdRun(restArgs, flags.json === true)
     return
   }
 }

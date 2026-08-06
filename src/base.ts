@@ -1,9 +1,7 @@
 /**
- * Shared infrastructure for the profiler modules (startupProfiler,
- * queryProfiler, headlessProfiler). All three use the same perf_hooks timeline
- * and the same line format for detailed reports.
- *
- * Extracted from `src/utils/profilerBase.ts`.
+ * Shared infrastructure for the profiler modules (startup, query, headless).
+ * All three use the same perf_hooks timeline and the same line format for
+ * detailed reports.
  */
 
 import { createRequire } from 'node:module'

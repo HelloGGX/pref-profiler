@@ -2,27 +2,29 @@
  * Headless mode profiling utility for measuring per-turn latency in
  * non-interactive (one-shot / `-p`) mode.
  *
- * Extracted from `src/utils/headlessProfiler.ts` (Claude Code source snapshot).
- *
  * Tracks key timing phases per turn:
  * - Time to system message output (turn 0 only)
  * - Time to first query started
  * - Time to first API response (TTFT)
  *
  * Uses Node.js built-in performance hooks API for standard timing measurement.
- * Sampled logging: 5% of sessions to the analytics sink (inert by default).
- *
- * Set `PERF_PROFILE_STARTUP=1` (or `CLAUDE_CODE_PROFILE_STARTUP=1`) for
- * detailed logging output.
+ * Enabled by `PERF_PROFILE_STARTUP=1` (deterministic; no hidden sampling).
  */
 
 import { logEvent } from './analytics.js'
+import {
+  type AiReport,
+  type Anomaly,
+  type PhaseInfo,
+  buildReport,
+  marksToCheckpoints,
+} from './analyze.js'
 import { logForDebugging } from './logger.js'
 import { PROFILE_STARTUP_ENV_VARS, firstEnvTruthy } from './env.js'
 import { getPerformance } from './base.js'
 
-// Non-interactive session state. In Claude Code this came from
-// `src/bootstrap/state.ts`; embedders of this standalone tool must opt in.
+// Non-interactive session state. Embedders must opt in explicitly for the
+// headless profiler to record anything.
 let nonInteractiveSession = false
 
 export function setNonInteractiveSession(value: boolean): void {
@@ -36,13 +38,8 @@ export function getIsNonInteractiveSession(): boolean {
 // Detailed profiling mode - same env var as startupProfiler
 const DETAILED_PROFILING = firstEnvTruthy(...PROFILE_STARTUP_ENV_VARS)
 
-// Sampling for telemetry logging: 5% of sessions.
-// Decision made once at module load - non-sampled sessions pay no profiling cost.
-const STATSIG_SAMPLE_RATE = 0.05
-const STATSIG_LOGGING_SAMPLED = Math.random() < STATSIG_SAMPLE_RATE
-
-// Enable profiling if either detailed mode OR sampled for telemetry
-const SHOULD_PROFILE = DETAILED_PROFILING || STATSIG_LOGGING_SAMPLED
+// Enable profiling only when explicitly requested - deterministic.
+const SHOULD_PROFILE = DETAILED_PROFILING
 
 // Use a unique prefix to avoid conflicts with other profiler marks
 const MARK_PREFIX = 'headless_'
@@ -183,10 +180,8 @@ export function logHeadlessProfilerTurn(): void {
   const metadata = getHeadlessTurnMetrics()
   if (!metadata) return
 
-  // Log to analytics sink if sampled
-  if (STATSIG_LOGGING_SAMPLED) {
-    logEvent('tengu_headless_latency', metadata)
-  }
+  // Log to analytics sink (if one is attached)
+  logEvent('headless_latency', metadata)
 
   // Log detailed output if detailed profiling enabled
   if (DETAILED_PROFILING) {
@@ -194,4 +189,98 @@ export function logHeadlessProfilerTurn(): void {
       `[headlessProfiler] Turn ${currentTurnNumber} metrics: ${JSON.stringify(metadata)}`,
     )
   }
+}
+
+/**
+ * Build the AI-friendly structured report for the current headless turn.
+ * Returns null when profiling is not active or no checkpoints were recorded.
+ */
+export function getHeadlessAiReport(): AiReport | null {
+  const metrics = getHeadlessTurnMetrics()
+  if (!metrics) return null
+
+  const perf = getPerformance()
+  const allMarks = perf.getEntriesByType('mark')
+  const marks = allMarks
+    .filter(mark => mark.name.startsWith(MARK_PREFIX))
+    .map(mark => ({ name: mark.name.slice(MARK_PREFIX.length), startTime: mark.startTime }))
+  if (marks.length === 0) return null
+
+  const checkpoints = marksToCheckpoints(marks)
+
+  // Phase durations, relative to time to first response where available.
+  const phaseDefs: Array<[string, number | string | undefined]> = [
+    ['system_message', metrics.time_to_system_message_ms],
+    ['query_start', metrics.time_to_query_start_ms],
+    ['query_overhead', metrics.query_overhead_ms],
+    ['first_response', metrics.time_to_first_response_ms],
+  ]
+  const referenceMs =
+    typeof metrics.time_to_first_response_ms === 'number'
+      ? metrics.time_to_first_response_ms
+      : 0
+  const phases: PhaseInfo[] = []
+  for (const [name, durationMs] of phaseDefs) {
+    if (typeof durationMs === 'number') {
+      phases.push({
+        name,
+        start: '',
+        end: '',
+        durationMs,
+        sharePct: referenceMs > 0 ? (durationMs / referenceMs) * 100 : 0,
+      })
+    }
+  }
+
+  const anomalies: Anomaly[] = []
+  const ttfr = metrics.time_to_first_response_ms
+  if (typeof ttfr === 'number') {
+    if (ttfr > 2000) {
+      anomalies.push({
+        severity: 'critical',
+        phase: 'first_response',
+        durationMs: ttfr,
+        thresholdMs: 2000,
+        reason: 'Time to first response exceeds 2000ms',
+        suggestion:
+          'Inspect query pipeline latency: context loading, client setup, and network time to first chunk.',
+      })
+    } else if (ttfr > 1000) {
+      anomalies.push({
+        severity: 'warning',
+        phase: 'first_response',
+        durationMs: ttfr,
+        thresholdMs: 1000,
+        reason: 'Time to first response exceeds 1000ms',
+        suggestion:
+          'Inspect query pipeline latency: context loading, client setup, and network time to first chunk.',
+      })
+    }
+  }
+  const overhead = metrics.query_overhead_ms
+  if (typeof overhead === 'number' && overhead > 500) {
+    anomalies.push({
+      severity: 'warning',
+      phase: 'query_overhead',
+      durationMs: overhead,
+      thresholdMs: 500,
+      reason: 'Query overhead exceeds 500ms',
+      suggestion:
+        'Reduce work between query start and API request: cache context/schemas, reuse client.',
+    })
+  }
+
+  const summaryOverride =
+    `Turn ${metrics.turn_number}: time to first response ${typeof ttfr === 'number' ? ttfr : 'n/a'}ms` +
+    (typeof overhead === 'number'
+      ? `, query overhead ${overhead}ms`
+      : '')
+
+  return buildReport({
+    mode: 'headless',
+    checkpoints,
+    phases,
+    extraAnomalies: anomalies,
+    summaryOverride,
+  })
 }

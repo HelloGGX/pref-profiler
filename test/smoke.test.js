@@ -35,6 +35,20 @@ test('startup profiler: checkpoints + report file', async () => {
   assert.match(report, /main_after_run/)
   assert.match(report, /RSS: /)
   assert.ok(startup.isDetailedProfilingEnabled())
+
+  // AI-friendly JSON report is written next to the text report.
+  const jsonPath = path.replace(/\.txt$/, '.json')
+  const jsonReport = JSON.parse(readFileSync(jsonPath, 'utf8'))
+  assert.equal(jsonReport.schema, 'perf-profiler/report@1')
+  assert.equal(jsonReport.mode, 'startup')
+  assert.ok(jsonReport.checkpoints.length >= 3)
+  assert.ok(Array.isArray(jsonReport.suggestions))
+
+  const aiReport = startup.getStartupAiReport()
+  assert.ok(aiReport)
+  assert.equal(aiReport.mode, 'startup')
+  // profiler_initialized (module load) + the 3 checkpoints recorded in this test
+  assert.equal(aiReport.totals.checkpointCount, 4)
 })
 
 test('query profiler: TTFT report', async () => {
@@ -52,6 +66,12 @@ test('query profiler: TTFT report', async () => {
   assert.match(report, /QUERY PROFILING REPORT/)
   assert.match(report, /Total TTFT:/)
   assert.match(report, /PHASE BREAKDOWN:/)
+
+  const aiReport = query.getQueryAiReport()
+  assert.ok(aiReport)
+  assert.equal(aiReport.mode, 'query')
+  assert.ok(aiReport.bottlenecks.length > 0)
+  assert.match(aiReport.summary, /TTFT/)
 })
 
 test('headless profiler: per-turn metrics', async () => {
@@ -70,6 +90,11 @@ test('headless profiler: per-turn metrics', async () => {
   assert.equal(metrics.turn_number, 0)
   assert.ok(typeof metrics.time_to_first_response_ms === 'number')
   assert.ok(metrics.checkpoint_count >= 5)
+
+  const aiReport = headless.getHeadlessAiReport()
+  assert.ok(aiReport)
+  assert.equal(aiReport.mode, 'headless')
+  assert.ok(aiReport.phases.length >= 3)
 })
 
 test.after(() => {

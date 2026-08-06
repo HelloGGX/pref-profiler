@@ -1,9 +1,6 @@
 /**
- * Debug logger replacing `src/utils/debug.ts` (logForDebugging).
- *
- * The original wrote to `~/.claude/debug/<sessionId>.txt` and gated on
- * `--debug` / USER_TYPE=ant. The standalone version writes to stderr and is
- * enabled by `--debug` or `PERF_DEBUG=1`, or programmatically.
+ * Debug logger. Writes to stderr and is enabled by `--debug` or
+ * `PERF_DEBUG=1`, or programmatically via setDebugEnabled().
  */
 
 import { isEnvTruthy } from './env.js'

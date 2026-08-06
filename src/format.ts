@@ -1,6 +1,6 @@
 /**
- * Pure display formatters extracted from `src/utils/format.ts` (Claude Code
- * source snapshot). Leaf-safe: no dependencies on the rest of the project.
+ * Pure display formatters. Leaf-safe: no dependencies on the rest of the
+ * project.
  */
 
 /**

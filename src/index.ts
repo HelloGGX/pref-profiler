@@ -1,16 +1,12 @@
 /**
  * perf-profiler - standalone checkpoint-based performance profiler.
  *
- * Extracted from the Claude Code source snapshot:
- * - src/utils/startupProfiler.ts
- * - src/utils/queryProfiler.ts
- * - src/utils/headlessProfiler.ts
- * - src/utils/profilerBase.ts
- *
- * The original Statsig telemetry, debug-file logging and Claude-internal
- * session state were replaced with inert/pluggable equivalents.
+ * Designed for harness engineering: profile startup, query, or headless
+ * phases with perf_hooks checkpoints, and emit AI-friendly structured reports
+ * (anomalies + fix suggestions) for fast automated triage.
  */
 
+export * from './analyze.js'
 export * from './base.js'
 export * from './startup.js'
 export * from './query.js'

@@ -1,86 +1,145 @@
 # perf-profiler
 
-从 Claude Code 源码快照（`claude-wiki`）中提取的性能检测代码，打包成零运行时依赖的独立 CLI 工具 + TypeScript 库。
+面向 harness 工程的检查点式性能检测工具。用 `perf_hooks` 时间线记录启动、查询、headless 等阶段的关键检查点，输出两类报告：
 
-提取自以下原始模块（逻辑保持原样，仅替换了 Claude 内部依赖）：
+- 人类可读的文本时间线（含 RSS / Heap 内存快照、TTFT 分解、慢操作告警）
+- **AI 友好的结构化 JSON**：检查点、阶段耗时、异常（severity + 原因 + 阈值）、瓶颈排名和**可直接执行的修复建议**，供 AI / 自动化快速定位和修复性能问题
 
-| 独立模块 | 原始文件 | 用途 |
-| --- | --- | --- |
-| `base.ts` | `src/utils/profilerBase.ts` | 共享 perf_hooks 时间线、报告行格式化 |
-| `startup.ts` | `src/utils/startupProfiler.ts` | 启动阶段检测（`profileCheckpoint` / `profileReport`），含内存快照 |
-| `query.ts` | `src/utils/queryProfiler.ts` | 查询管线检测（输入到首 token / TTFT），含阶段分解与慢操作告警 |
-| `headless.ts` | `src/utils/headlessProfiler.ts` | 非交互（headless）模式逐轮延迟检测 |
+零运行时依赖，使用 [bun](https://bun.sh)（>= 1.3）打包为单个二进制。
 
 ## 构建与运行
 
-使用 [bun](https://bun.sh)（>= 1.3）将 CLI 打包为单个二进制文件（含 bun 运行时，零外部依赖）：
-
 ```bash
-bun run build        # 等价于 bun build ./src/cli.ts --compile --minify（本包零运行时依赖）
+bun run build        # 等价于 bun build ./src/cli.ts --compile --minify
                      # 产物：Windows 为 bin/perf-profiler.exe，macOS/Linux 为 bin/perf-profiler
 ```
 
-运行二进制：
-
 ```bash
 ./bin/perf-profiler --help            # Windows: .\bin\perf-profiler.exe --help
-./bin/perf-profiler demo --query
-./bin/perf-profiler run -- node script.js
+./bin/perf-profiler demo --query      # 演示 + 文本报告
+./bin/perf-profiler demo --query --json   # 演示 + AI 友好 JSON 报告
 ```
 
-`package.json` 的 `bin` 字段直接指向 `bin/` 中的二进制文件，因此 `bun link` 或 `npm link`（已构建后）可将 `perf-profiler` 加入 PATH。开发时也可以不编译，直接 `bun run dev`（等价于 `bun run ./src/cli.ts`）。
+开发时也可以不编译：`bun run dev`（等价于 `bun run ./src/cli.ts`）。`package.json` 的 `bin` 字段直接指向 `bin/` 中的二进制，构建后执行 `bun link` 即可全局使用 `perf-profiler` 命令。
 
 ## CLI 用法
 
 ### demo - 生成演示报告
 
-演示三种检测场景，输出与原始格式一致：
-
 ```bash
-perf-profiler demo --startup                              # 启动检测演示（默认）
-perf-profiler demo --query                                # 查询管线演示（TTFT 分解）
-perf-profiler demo --headless                             # 非交互模式逐轮延迟演示
+perf-profiler demo --startup                     # 启动检测演示（默认）
+perf-profiler demo --query                       # 查询管线演示（TTFT 分解）
+perf-profiler demo --headless                    # 非交互模式逐轮延迟演示
 perf-profiler demo --session-id test1 --out /tmp/perf
 ```
 
+加 `--json` 时直接输出 AI 友好报告（见下文「AI 报告」）。
+
 ### report - 读取检测报告
 
-详细模式写入的报告（`<config-home>/startup-perf/<sessionId>.txt`）可直接查看：
+详细模式写入的报告在 `<config-home>/reports/` 下，包含 `.txt`（人类可读）和 `.json`（AI 友好）两个文件：
 
 ```bash
-perf-profiler report                                      # 扫描默认输出目录
-perf-profiler report --dir /tmp/perf                      # 指定目录（按修改时间倒序）
-perf-profiler report /path/to/a.txt                       # 直接指定文件
+perf-profiler report                             # 扫描默认输出目录
+perf-profiler report --dir /tmp/perf             # 指定目录（按修改时间倒序）
+perf-profiler report /path/to/x.json             # 直接指定文件
+perf-profiler report --dir /tmp/perf --json      # 只输出原始 JSON，便于管道给 AI/harness
 ```
 
 ### run - 检测任意命令
 
-用同一条 perf_hooks 时间线包裹任意命令，输出时间线 + 汇总：
+用同一条 perf_hooks 时间线包裹任意命令：
 
 ```bash
 perf-profiler run -- node script.js arg1
 perf-profiler run -- npm test
+perf-profiler run --json -- npm test             # 输出 AI 友好 JSON
 ```
 
-命令直接以 `spawn(..., { shell: false })` 执行（不经过 shell，参数不做二次解析）。Windows 上如需 shell 特性或 `.cmd`/`.bat` 包装脚本，请显式使用 `cmd /c` 或 `powershell -Command`。子进程退出码会原样透传给工具本身。CPU/峰值 RSS 仅在 Linux 上通过 `/proc` 采样，其他平台显示 `n/a (Linux only)`。
+命令直接以 `spawn(..., { shell: false })` 执行（不经过 shell，参数不做二次解析）。Windows 上如需 shell 特性或 `.cmd`/`.bat` 包装脚本，请显式使用 `cmd /c` 或 `powershell -Command`。子进程退出码原样透传；退出码非 0 会作为 critical 异常写入报告。CPU / 峰值 RSS 仅在 Linux 上通过 `/proc` 采样。
+
+## AI 报告（harness 集成）
+
+`--json` 输出遵循固定 schema，AI 可以直接消费：
+
+```json
+{
+  "schema": "perf-profiler/report@1",
+  "generatedAt": "2026-08-06T12:00:00.000Z",
+  "sessionId": "abc-123",
+  "mode": "query",
+  "totals": { "totalMs": 733.7, "checkpointCount": 19 },
+  "checkpoints": [
+    { "name": "query_user_input_received", "totalMs": 0, "deltaMs": 0, "rssBytes": 52848230, "heapUsedBytes": 6029304 }
+  ],
+  "phases": [
+    { "name": "Tool schemas", "start": "query_tool_schema_build_start", "end": "query_tool_schema_build_end", "durationMs": 78, "sharePct": 10.6 }
+  ],
+  "anomalies": [
+    {
+      "severity": "warning",
+      "checkpoint": "query_tool_schema_build_end",
+      "durationMs": 78,
+      "thresholdMs": 50,
+      "reason": "Known bottleneck \"query_tool_schema_build_end\" exceeds 50ms",
+      "suggestion": "Cache tool schemas or build them lazily instead of regenerating per query."
+    }
+  ],
+  "bottlenecks": [
+    { "name": "Network TTFB", "durationMs": 171, "sharePct": 23.3, "suggestion": "Check endpoint latency, connection keep-alive, compression, and request timeouts." }
+  ],
+  "summary": "TTFT 437.8ms: pre-request overhead 268.6ms (61.4%), network latency 169.2ms (38.6%)",
+  "suggestions": [
+    "Cache tool schemas or build them lazily instead of regenerating per query.",
+    "Check endpoint latency, connection keep-alive, compression, and request timeouts."
+  ]
+}
+```
+
+关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `checkpoints` | 每个检查点的累计耗时 / 相邻间隔 / 内存快照（详细模式） |
+| `phases` | 语义化阶段（context loading、tool schemas、network TTFB…）及占比 |
+| `anomalies` | 自动检测的异常：`severity`（critical/warning/info）、原因、阈值、修复建议 |
+| `bottlenecks` | 按耗时排序的前 5 个阶段，各带针对性建议 |
+| `summary` | 一句话总结（如 TTFT 中网络延迟 vs 本地开销的占比） |
+| `suggestions` | 去重后的修复建议列表，AI 可直接按序执行 |
+
+异常阈值：
+
+| 条件 | 严重度 |
+| --- | --- |
+| 检查点间隔 > 1000ms | critical |
+| 检查点间隔 > 100ms | warning |
+| 已知瓶颈（tool schema / client creation / git status）> 50ms | warning |
+| 查询网络延迟 > 1000ms（query 模式） | critical |
+| 查询网络延迟 > 300ms（query 模式） | warning |
+| 首次响应 TTFR > 2000ms（headless 模式） | critical |
+| 堆内存 > 512MB | warning |
 
 ## 作为库使用
 
 ```ts
-import { profileCheckpoint, profileReport } from 'perf-profiler'
-// 任意初始化阶段打点（需先启用详细模式，见下方环境变量）
+import { profileCheckpoint, profileReport, getStartupAiReport } from 'perf-profiler'
+
+// 任意初始化阶段打点（需先设 PERF_PROFILE_STARTUP=1）
 profileCheckpoint('app_entry')
 profileCheckpoint('app_imports_loaded')
-profileReport() // 写入 <output-dir>/<sessionId>.txt 并打印
+profileReport() // 写 <output-dir>/<sessionId>.txt 和 .json
+
+const report = getStartupAiReport() // 直接拿 AI 友好 JSON 数据
 ```
 
 ```ts
-import { startQueryProfile, queryCheckpoint, endQueryProfile } from 'perf-profiler'
+import { startQueryProfile, queryCheckpoint, endQueryProfile, getQueryAiReport } from 'perf-profiler'
 startQueryProfile()
 queryCheckpoint('query_context_loading_start')
 // ... 查询管线各阶段
 queryCheckpoint('query_first_chunk_received') // TTFT
 endQueryProfile()
+const report = getQueryAiReport()
 ```
 
 ```ts
@@ -88,49 +147,26 @@ import {
   setNonInteractiveSession,
   headlessProfilerStartTurn,
   headlessProfilerCheckpoint,
-  getHeadlessTurnMetrics,
+  getHeadlessAiReport,
 } from 'perf-profiler'
 setNonInteractiveSession(true)
 headlessProfilerStartTurn()
 headlessProfilerCheckpoint('query_started')
 headlessProfilerCheckpoint('first_chunk')
-console.log(getHeadlessTurnMetrics())
+const report = getHeadlessAiReport()
 ```
+
+遥测默认完全关闭；如需上报指标，可用 `setAnalyticsSink((event, metadata) => ...)` 挂接（事件名 `startup_perf` / `headless_latency`）。
 
 ## 环境变量
 
 | 变量 | 说明 |
 | --- | --- |
-| `PERF_PROFILE_STARTUP=1` | 开启详细启动/headless 检测（别名：`CLAUDE_CODE_PROFILE_STARTUP=1`，与原版兼容） |
-| `PERF_PROFILE_QUERY=1` | 开启查询检测（别名：`CLAUDE_CODE_PROFILE_QUERY=1`） |
-| `PERF_OUTPUT_DIR=<dir>` | 详细报告输出目录（默认 `<config-home>/startup-perf`） |
-| `PERF_CONFIG_DIR=<dir>` | 配置目录（默认 `$CLAUDE_CONFIG_DIR` 或 `~/.claude`） |
+| `PERF_PROFILE_STARTUP=1` | 开启详细启动 / headless 检测（确定性启用，无采样） |
+| `PERF_PROFILE_QUERY=1` | 开启查询检测 |
+| `PERF_OUTPUT_DIR=<dir>` | 报告输出目录（默认 `<config-home>/reports`） |
+| `PERF_CONFIG_DIR=<dir>` | 配置目录（默认 `~/.perf-profiler`） |
 | `PERF_DEBUG=1` / `--debug` | 调试日志输出到 stderr |
-
-详细报告格式与原版一致：
-
-```
-================================================================================
-STARTUP PROFILING REPORT
-================================================================================
-
-[+  34.158ms] (+ 34.158ms) profiler_initialized | RSS: 50.8MB, Heap: 5.7MB
-[+  34.320ms] (+  0.162ms) cli_entry | RSS: 50.8MB, Heap: 5.7MB
-...
-Total startup time: 387.934ms
-================================================================================
-```
-
-## 与原版的差异
-
-- **遥测**：原版通过 `services/analytics`（Statsig）上报，且有采样率；本工具默认完全不发任何数据，保留采样决策逻辑，可通过 `setAnalyticsSink()` 挂接自己的上报函数接收 `tengu_startup_perf` / `tengu_headless_latency` 指标。
-- **调试日志**：原版写入 `~/.claude/debug/<sessionId>.txt` 并受 `USER_TYPE=ant` / `--debug` 控制；本工具改为写入 stderr（`PERF_DEBUG=1` 或 `--debug`）。
-- **会话 ID**：原版来自 `bootstrap/state.ts`；本工具用 `crypto.randomUUID()` 生成，可用 `setSessionId()` 覆盖（例如 CLI 的 `--session-id`）。
-- **headless 判定**：原版由全局会话状态决定；本工具需显式调用 `setNonInteractiveSession(true)`。
-- **文件写入**：原版 `writeFileSync_DEPRECATED`（带 fsync）等价替换为 `openSync + writeFileSync + fsyncSync + closeSync`。
-- **入口点**：原版 `CLAUDE_CODE_ENTRYPOINT` 语义保留为 `PERF_ENTRYPOINT`。
-- **符号**：`⚠️`、`█` 等字符保持原字节（原仓库文件本身是正确的 UTF-8，仅为终端显示乱码）。
-- **新增**：`getQueryProfileReport()`、`getHeadlessTurnMetrics()` 从私有改为公开导出，便于直接嵌入；CLI 的 `run` / `report` / `demo` 子命令。
 
 ## 测试
 
