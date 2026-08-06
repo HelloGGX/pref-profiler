@@ -22,7 +22,7 @@
     "build:dev": "bun build ./src/cli.ts --compile --outfile ./bin/perf-profiler",
     "dev": "bun run ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
-    "test": "bun test ./test/smoke.test.js"
+    "test": "bun test ./test/"
   },
   "engines": {
     "bun": ">=1.3"

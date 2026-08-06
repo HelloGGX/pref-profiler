@@ -96,7 +96,7 @@ function readProcSample(pid: number | undefined): ProcSample | null {
   }
 }
 
-function parseCommand(argv: string[]): {
+export function parseCommand(argv: string[]): {
   command: CliCommand
   rest: string[]
 } {
@@ -115,7 +115,7 @@ function parseCommand(argv: string[]): {
   return { command: 'help', rest: [] }
 }
 
-function parseFlags(
+export function parseFlags(
   args: string[],
   flagSpec: Record<string, 'flag' | 'value'>,
 ): { flags: Record<string, string | boolean>; positionals: string[]; rest: string[] } {
@@ -455,7 +455,7 @@ async function cmdRun(rest: string[], json: boolean): Promise<void> {
   process.exitCode = exitCode ?? 1
 }
 
-function buildRunReport(
+export function buildRunReport(
   command: string,
   marks: Array<{ name: string; startTime: number }>,
   baseline: number,
@@ -570,4 +570,8 @@ async function main(): Promise<void> {
   }
 }
 
-void main()
+// Run only when executed as the entry point so tests can import this module
+// to exercise its exported helpers without starting the CLI.
+if (import.meta.main) {
+  void main()
+}

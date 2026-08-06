@@ -326,7 +326,7 @@ All three profilers share the same perf_hooks timeline (`getPerformance()` in [`
 Contributions are welcome! Keep it simple:
 
 1. Fork the repository and create a feature branch.
-2. Run `bun run build` and `bun test ./test/smoke.test.js` before submitting.
+2. Run `bun run build` and `bun test ./test/` before submitting.
 3. Open a pull request describing the change and any threshold/schema updates.
 
 ## License

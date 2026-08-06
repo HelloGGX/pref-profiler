@@ -32,10 +32,15 @@ const DETAILED_PROFILING = firstEnvTruthy(...PROFILE_STARTUP_ENV_VARS)
 // sampling. Disabled sessions pay no profiling cost.
 const SHOULD_PROFILE = DETAILED_PROFILING
 
+// Unique mark prefix so startup checkpoints never collide with or leak into
+// the query/headless profilers, which share the same process-wide perf_hooks
+// timeline.
+const MARK_PREFIX = 'startup_'
+
 // Track memory snapshots separately (perf_hooks doesn't track memory).
 // Only used when DETAILED_PROFILING is enabled.
 // Stored as an array that appends in the same order as perf.mark() calls, so
-// memorySnapshots[i] corresponds to getEntriesByType('mark')[i]. Using a Map
+// memorySnapshots[i] corresponds to getStartupMarks()[i]. Using a Map
 // keyed by checkpoint name is wrong because some checkpoints fire more than
 // once (e.g. loadSettingsFromDisk_start fires during init and again after
 // plugins reset the settings cache), and the second call would overwrite the
@@ -62,12 +67,27 @@ export function profileCheckpoint(name: string): void {
   if (!SHOULD_PROFILE) return
 
   const perf = getPerformance()
-  perf.mark(name)
+  perf.mark(`${MARK_PREFIX}${name}`)
 
   // Only capture memory when detailed profiling enabled (env var)
   if (DETAILED_PROFILING) {
     memorySnapshots.push(process.memoryUsage())
   }
+}
+
+/**
+ * Marks recorded by this profiler, with the prefix stripped so reports keep
+ * the caller-facing checkpoint names.
+ */
+function getStartupMarks(): Array<{ name: string; startTime: number }> {
+  const perf = getPerformance()
+  return perf
+    .getEntriesByType('mark')
+    .filter(mark => mark.name.startsWith(MARK_PREFIX))
+    .map(mark => ({
+      name: mark.name.slice(MARK_PREFIX.length),
+      startTime: mark.startTime,
+    }))
 }
 
 /**
@@ -79,8 +99,7 @@ function getReport(): string {
     return 'Startup profiling not enabled'
   }
 
-  const perf = getPerformance()
-  const marks = perf.getEntriesByType('mark')
+  const marks = getStartupMarks()
   if (marks.length === 0) {
     return 'No profiling checkpoints recorded'
   }
@@ -161,8 +180,7 @@ export function getStartupPerfLogPath(): string {
 export function logStartupPerf(): void {
   if (!SHOULD_PROFILE) return
 
-  const perf = getPerformance()
-  const marks = perf.getEntriesByType('mark')
+  const marks = getStartupMarks()
   if (marks.length === 0) return
 
   // Build checkpoint lookup
@@ -198,8 +216,7 @@ export function logStartupPerf(): void {
 export function getStartupAiReport(): AiReport | null {
   if (!SHOULD_PROFILE) return null
 
-  const perf = getPerformance()
-  const marks = perf.getEntriesByType('mark')
+  const marks = getStartupMarks()
   if (marks.length === 0) return null
 
   const checkpoints = marksToCheckpoints(

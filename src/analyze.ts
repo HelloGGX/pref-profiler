@@ -73,11 +73,11 @@ const MEMORY_WARN_BYTES = 512 * 1024 * 1024
 // Phase-name -> fix suggestion mapping. Order matters: first match wins.
 const PHASE_SUGGESTIONS: Array<[RegExp, string]> = [
   [
-    /tool schemas?/i,
+    /tool schemas?|tool_schema/i,
     'Cache tool schemas or build them lazily instead of regenerating per query.',
   ],
   [
-    /client creation/i,
+    /client creation|client_creation/i,
     'Reuse a persistent API client instance instead of constructing one per query.',
   ],
   [

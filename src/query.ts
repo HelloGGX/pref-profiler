@@ -47,14 +47,16 @@ import {
 // Module-level state - initialized once when the module loads
 const ENABLED = firstEnvTruthy(...PROFILE_QUERY_ENV_VARS)
 
+// Unique mark prefix. Checkpoint names already start with "query_"; the extra
+// prefix keeps this profiler's marks isolated from the startup/headless
+// profilers on the shared perf_hooks timeline.
+const MARK_PREFIX = 'qry_'
+
 // Track memory snapshots separately (perf_hooks doesn't track memory)
 const memorySnapshots = new Map<string, NodeJS.MemoryUsage>()
 
 // Track query count for reporting
 let queryCount = 0
-
-// Track first token received time separately for summary
-let firstTokenTime: number | null = null
 
 /**
  * Start profiling a new query session
@@ -62,17 +64,36 @@ let firstTokenTime: number | null = null
 export function startQueryProfile(): void {
   if (!ENABLED) return
 
-  const perf = getPerformance()
-
-  // Clear previous marks and memory snapshots
-  perf.clearMarks()
+  // Clear only this profiler's marks, leaving other profilers' timelines intact
+  clearQueryMarks()
   memorySnapshots.clear()
-  firstTokenTime = null
 
   queryCount++
 
   // Record the start checkpoint
   queryCheckpoint('query_user_input_received')
+}
+
+/** Remove only marks belonging to this profiler. */
+function clearQueryMarks(): void {
+  const perf = getPerformance()
+  for (const mark of perf.getEntriesByType('mark')) {
+    if (mark.name.startsWith(MARK_PREFIX)) {
+      perf.clearMarks(mark.name)
+    }
+  }
+}
+
+/** Marks recorded by this profiler, with the prefix stripped. */
+function getQueryMarks(): Array<{ name: string; startTime: number }> {
+  const perf = getPerformance()
+  return perf
+    .getEntriesByType('mark')
+    .filter(mark => mark.name.startsWith(MARK_PREFIX))
+    .map(mark => ({
+      name: mark.name.slice(MARK_PREFIX.length),
+      startTime: mark.startTime,
+    }))
 }
 
 /**
@@ -82,17 +103,8 @@ export function queryCheckpoint(name: string): void {
   if (!ENABLED) return
 
   const perf = getPerformance()
-  perf.mark(name)
-  memorySnapshots.set(name, process.memoryUsage())
-
-  // Track first token specially
-  if (name === 'query_first_chunk_received' && firstTokenTime === null) {
-    const marks = perf.getEntriesByType('mark')
-    if (marks.length > 0) {
-      const lastMark = marks[marks.length - 1]
-      firstTokenTime = lastMark?.startTime ?? 0
-    }
-  }
+  perf.mark(`${MARK_PREFIX}${name}`)
+  memorySnapshots.set(`${MARK_PREFIX}${name}`, process.memoryUsage())
 }
 
 /**
@@ -143,8 +155,7 @@ export function getQueryProfileReport(): string {
     return 'Query profiling not enabled (set PERF_PROFILE_QUERY=1)'
   }
 
-  const perf = getPerformance()
-  const marks = perf.getEntriesByType('mark')
+  const marks = getQueryMarks()
   if (marks.length === 0) {
     return 'No query profiling checkpoints recorded'
   }
@@ -169,7 +180,7 @@ export function getQueryProfileReport(): string {
         relativeTime,
         deltaMs,
         mark.name,
-        memorySnapshots.get(mark.name),
+        memorySnapshots.get(`${MARK_PREFIX}${mark.name}`),
         10,
         9,
         getSlowWarning(deltaMs, mark.name),
@@ -302,13 +313,12 @@ export function logQueryProfileReport(): void {
 export function getQueryAiReport(): AiReport | null {
   if (!ENABLED) return null
 
-  const perf = getPerformance()
-  const marks = perf.getEntriesByType('mark')
+  const marks = getQueryMarks()
   if (marks.length === 0) return null
 
   const baseline = marks[0]?.startTime ?? 0
   const checkpoints = marksToCheckpoints(marks, name =>
-    memorySnapshots.get(name),
+    memorySnapshots.get(`${MARK_PREFIX}${name}`),
   )
   const phases = getQueryPhases(marks, baseline)
 
