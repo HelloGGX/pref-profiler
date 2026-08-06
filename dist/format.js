@@ -1,0 +1,23 @@
+/**
+ * Pure display formatters extracted from `src/utils/format.ts` (Claude Code
+ * source snapshot). Leaf-safe: no dependencies on the rest of the project.
+ */
+/**
+ * Formats a byte count to a human-readable string (KB, MB, GB).
+ * @example formatFileSize(1536) -> "1.5KB"
+ */
+export function formatFileSize(sizeInBytes) {
+    const kb = sizeInBytes / 1024;
+    if (kb < 1) {
+        return `${sizeInBytes} bytes`;
+    }
+    if (kb < 1024) {
+        return `${kb.toFixed(1).replace(/\.0$/, '')}KB`;
+    }
+    const mb = kb / 1024;
+    if (mb < 1024) {
+        return `${mb.toFixed(1).replace(/\.0$/, '')}MB`;
+    }
+    const gb = mb / 1024;
+    return `${gb.toFixed(1).replace(/\.0$/, '')}GB`;
+}
