@@ -3,28 +3,24 @@
   "version": "1.0.0",
   "description": "Standalone checkpoint-based performance profiler extracted from the Claude Code source snapshot (startupProfiler / queryProfiler / headlessProfiler / profilerBase).",
   "type": "module",
+  "packageManager": "bun@1.3.10",
   "license": "MIT",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
   "bin": {
-    "perf-profiler": "./dist/cli.js"
+    "perf-profiler": "./bin/perf-profiler"
   },
   "files": [
-    "dist",
+    "bin",
+    "src",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node ./dist/cli.js",
-    "test": "node --test test/smoke.test.js"
+    "build": "bun build ./src/cli.ts --compile --minify --outfile ./bin/perf-profiler",
+    "build:dev": "bun build ./src/cli.ts --compile --outfile ./bin/perf-profiler",
+    "dev": "bun run ./src/cli.ts",
+    "start": "bun run ./src/cli.ts",
+    "test": "bun test ./test/smoke.test.js"
   },
   "engines": {
-    "node": ">=18"
+    "bun": ">=1.3"
   }
 }

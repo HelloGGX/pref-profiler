@@ -13,13 +13,22 @@
 
 ## 构建与运行
 
+使用 [bun](https://bun.sh)（>= 1.3）将 CLI 打包为单个二进制文件（含 bun 运行时，零外部依赖）：
+
 ```bash
-# 依赖 Node.js >= 18，TypeScript 编译器取自仓库根目录的 node_modules
-node_modules/.bin/tsc.exe -p perf-profiler
-node perf-profiler/dist/cli.js --help
+bun run build        # 等价于 bun build ./src/cli.ts --compile --minify（本包零运行时依赖）
+                     # 产物：Windows 为 bin/perf-profiler.exe，macOS/Linux 为 bin/perf-profiler
 ```
 
-也可以 `npm link`（或 `npm install -g` 本目录）后将 `perf-profiler` 加入 PATH。
+运行二进制：
+
+```bash
+./bin/perf-profiler --help            # Windows: .\bin\perf-profiler.exe --help
+./bin/perf-profiler demo --query
+./bin/perf-profiler run -- node script.js
+```
+
+`package.json` 的 `bin` 字段直接指向 `bin/` 中的二进制文件，因此 `bun link` 或 `npm link`（已构建后）可将 `perf-profiler` 加入 PATH。开发时也可以不编译，直接 `bun run dev`（等价于 `bun run ./src/cli.ts`）。
 
 ## CLI 用法
 
@@ -28,10 +37,10 @@ node perf-profiler/dist/cli.js --help
 演示三种检测场景，输出与原始格式一致：
 
 ```bash
-node perf-profiler/dist/cli.js demo                       # 启动检测演示（默认）
-node perf-profiler/dist/cli.js demo --query               # 查询管线演示（TTFT 分解）
-node perf-profiler/dist/cli.js demo --headless            # 非交互模式逐轮延迟演示
-node perf-profiler/dist/cli.js demo --session-id test1 --out /tmp/perf
+perf-profiler demo --startup                              # 启动检测演示（默认）
+perf-profiler demo --query                                # 查询管线演示（TTFT 分解）
+perf-profiler demo --headless                             # 非交互模式逐轮延迟演示
+perf-profiler demo --session-id test1 --out /tmp/perf
 ```
 
 ### report - 读取检测报告
@@ -39,9 +48,9 @@ node perf-profiler/dist/cli.js demo --session-id test1 --out /tmp/perf
 详细模式写入的报告（`<config-home>/startup-perf/<sessionId>.txt`）可直接查看：
 
 ```bash
-node perf-profiler/dist/cli.js report                     # 扫描默认输出目录
-node perf-profiler/dist/cli.js report --dir /tmp/perf     # 指定目录（按修改时间倒序）
-node perf-profiler/dist/cli.js report /path/to/a.txt      # 直接指定文件
+perf-profiler report                                      # 扫描默认输出目录
+perf-profiler report --dir /tmp/perf                      # 指定目录（按修改时间倒序）
+perf-profiler report /path/to/a.txt                       # 直接指定文件
 ```
 
 ### run - 检测任意命令
@@ -49,8 +58,8 @@ node perf-profiler/dist/cli.js report /path/to/a.txt      # 直接指定文件
 用同一条 perf_hooks 时间线包裹任意命令，输出时间线 + 汇总：
 
 ```bash
-node perf-profiler/dist/cli.js run -- node script.js arg1
-node perf-profiler/dist/cli.js run -- npm test
+perf-profiler run -- node script.js arg1
+perf-profiler run -- npm test
 ```
 
 命令直接以 `spawn(..., { shell: false })` 执行（不经过 shell，参数不做二次解析）。Windows 上如需 shell 特性或 `.cmd`/`.bat` 包装脚本，请显式使用 `cmd /c` 或 `powershell -Command`。子进程退出码会原样透传给工具本身。CPU/峰值 RSS 仅在 Linux 上通过 `/proc` 采样，其他平台显示 `n/a (Linux only)`。
@@ -126,5 +135,5 @@ Total startup time: 387.934ms
 ## 测试
 
 ```bash
-node --test perf-profiler/test/smoke.test.js
+bun test ./test/smoke.test.js
 ```
