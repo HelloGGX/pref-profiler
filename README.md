@@ -1,66 +1,160 @@
 # perf-profiler
 
-面向 harness 工程的检查点式性能检测工具。用 `perf_hooks` 时间线记录启动、查询、headless 等阶段的关键检查点，输出两类报告：
+> Checkpoint-based performance profiler that turns timing data into actionable, AI-friendly reports.
 
-- 人类可读的文本时间线（含 RSS / Heap 内存快照、TTFT 分解、慢操作告警）
-- **AI 友好的结构化 JSON**：检查点、阶段耗时、异常（severity + 原因 + 阈值）、瓶颈排名和**可直接执行的修复建议**，供 AI / 自动化快速定位和修复性能问题
+![Bun](https://img.shields.io/badge/bun-%3E%3D1.3-black?logo=bun&logoColor=white)
+![ESM](https://img.shields.io/badge/ESM-supported-4fc921)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
-零运行时依赖，使用 [bun](https://bun.sh)（>= 1.3）打包为单个二进制。
+**perf-profiler** is a zero-dependency profiler built for harness and agent engineering. It instruments slow phases of a pipeline — startup, query (time-to-first-token), and headless per-turn latency — with lightweight `perf_hooks` checkpoints, then emits:
 
-## 构建与运行
+- a **human-readable timeline** with RSS/heap memory snapshots and slow-operation warnings;
+- an **AI-friendly JSON report** (`perf-profiler/report@1`) with detected anomalies, ranked bottlenecks, and concrete fix suggestions an AI agent can act on directly.
+
+No telemetry, no hidden sampling, no runtime dependencies — just a single self-contained binary.
+
+## Features
+
+- **AI-native output** — fixed JSON schema with severity, thresholds, reasons, and fix suggestions, designed to be piped straight into an AI agent or harness.
+- **Three profilers, one tool** — startup phases, query pipeline (TTFT), and headless per-turn latency share the same perf_hooks timeline and report format.
+- **Memory-aware** — RSS and heap snapshots at every checkpoint in detailed mode.
+- **Zero dependencies** — compiled with [Bun](https://bun.sh) into a single binary; no Node or package install required at runtime.
+- **Deterministic** — enabled explicitly via `PERF_PROFILE_*` env vars; no hidden sampling, no background telemetry.
+- **Harness-friendly** — raw JSON piping (`--json`), exit-code propagation, and stable file outputs under one directory.
+
+## Table of Contents
+
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [CLI Reference](#cli-reference)
+- [AI-Friendly Reports](#ai-friendly-reports)
+- [Library API](#library-api)
+- [Configuration](#configuration)
+- [How It Works](#how-it-works)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Install
+
+### Binary (recommended)
+
+Download the prebuilt binary for your platform from the [Releases](https://github.com/HelloGGX/pref-profiler/releases) page, or build it yourself:
 
 ```bash
-bun run build        # 等价于 bun build ./src/cli.ts --compile --minify
-                     # 产物：Windows 为 bin/perf-profiler.exe，macOS/Linux 为 bin/perf-profiler
+bun run build
+./bin/perf-profiler --help        # Windows: .\bin\perf-profiler.exe --help
 ```
 
+The build produces `bin/perf-profiler` on macOS/Linux and `bin/perf-profiler.exe` on Windows — a single executable with the Bun runtime embedded.
+
+### From source
+
 ```bash
-./bin/perf-profiler --help            # Windows: .\bin\perf-profiler.exe --help
-./bin/perf-profiler demo --query      # 演示 + 文本报告
-./bin/perf-profiler demo --query --json   # 演示 + AI 友好 JSON 报告
+git clone https://github.com/HelloGGX/pref-profiler.git
+cd pref-profiler
+bun run build                     # requires Bun >= 1.3
 ```
 
-开发时也可以不编译：`bun run dev`（等价于 `bun run ./src/cli.ts`）。`package.json` 的 `bin` 字段直接指向 `bin/` 中的二进制，构建后执行 `bun link` 即可全局使用 `perf-profiler` 命令。
-
-## CLI 用法
-
-### demo - 生成演示报告
+### As a library
 
 ```bash
-perf-profiler demo --startup                     # 启动检测演示（默认）
-perf-profiler demo --query                       # 查询管线演示（TTFT 分解）
-perf-profiler demo --headless                    # 非交互模式逐轮延迟演示
-perf-profiler demo --session-id test1 --out /tmp/perf
+bun add perf-profiler             # from a registry, or:
+bun add github:HelloGGX/pref-profiler
 ```
 
-加 `--json` 时直接输出 AI 友好报告（见下文「AI 报告」）。
+The package exports its TypeScript source directly, so the library API works under Bun without a build step.
 
-### report - 读取检测报告
+## Quick Start
 
-详细模式写入的报告在 `<config-home>/reports/` 下，包含 `.txt`（人类可读）和 `.json`（AI 友好）两个文件：
-
-```bash
-perf-profiler report                             # 扫描默认输出目录
-perf-profiler report --dir /tmp/perf             # 指定目录（按修改时间倒序）
-perf-profiler report /path/to/x.json             # 直接指定文件
-perf-profiler report --dir /tmp/perf --json      # 只输出原始 JSON，便于管道给 AI/harness
-```
-
-### run - 检测任意命令
-
-用同一条 perf_hooks 时间线包裹任意命令：
+### Profile any command
 
 ```bash
-perf-profiler run -- node script.js arg1
 perf-profiler run -- npm test
-perf-profiler run --json -- npm test             # 输出 AI 友好 JSON
+perf-profiler run --json -- npm test    # AI-friendly JSON report
 ```
 
-命令直接以 `spawn(..., { shell: false })` 执行（不经过 shell，参数不做二次解析）。Windows 上如需 shell 特性或 `.cmd`/`.bat` 包装脚本，请显式使用 `cmd /c` 或 `powershell -Command`。子进程退出码原样透传；退出码非 0 会作为 critical 异常写入报告。CPU / 峰值 RSS 仅在 Linux 上通过 `/proc` 采样。
+```text
+task done
+================================================================================
+COMMAND PROFILE REPORT - node
+================================================================================
 
-## AI 报告（harness 集成）
+[+     0.000ms] (+    0.000ms) run_start
+[+  1878.300ms] (+ 1878.300ms) run_spawned
+[+  2100.798ms] (+  222.498ms) run_exit
 
-`--json` 输出遵循固定 schema，AI 可以直接消费：
+Wall time:        2100.798ms
+Child CPU:        n/a (Linux only)
+Exit code:        0
+================================================================================
+```
+
+### Profile your application's phases
+
+Drop checkpoints into your startup or query pipeline, then read the report:
+
+```ts
+import {
+  profileCheckpoint,
+  profileReport,
+  getStartupAiReport,
+} from 'perf-profiler'
+
+// Set PERF_PROFILE_STARTUP=1 before importing the profiler module
+profileCheckpoint('app_entry')
+profileCheckpoint('app_imports_loaded')
+profileCheckpoint('app_ready')
+
+profileReport() // writes <output-dir>/<sessionId>.txt and .json
+const report = getStartupAiReport() // structured data for your harness
+```
+
+Run it and inspect the JSON:
+
+```bash
+PERF_PROFILE_STARTUP=1 node your-app.js
+perf-profiler report --dir ~/.perf-profiler/reports
+```
+
+## CLI Reference
+
+```text
+perf-profiler <command> [options]
+```
+
+| Command | Description |
+| --- | --- |
+| `demo` | Run a scripted profiling demo: `--startup` (default), `--query`, or `--headless` |
+| `report` | Print report files (`.txt` / `.json`) from the output directory |
+| `run -- <cmd>` | Profile an arbitrary command with a timeline and summary |
+| `help` | Show help |
+
+### Global / command options
+
+| Option | Applies to | Description |
+| --- | --- | --- |
+| `--json` | `demo`, `report`, `run` | Output the AI-friendly JSON report (raw, no headers for `report`) |
+| `--out <dir>` | `demo` | Report output directory |
+| `--session-id <id>` | `demo` | Stable report file name |
+| `--dir <dir>` | `report` | Scan a directory instead of the default output dir |
+
+### Examples
+
+```bash
+perf-profiler demo --query                     # text report with TTFT breakdown
+perf-profiler demo --query --json              # same demo, AI-friendly JSON
+perf-profiler demo --headless                  # per-turn latency metrics
+perf-profiler report --dir /tmp/perf --json    # raw JSON, pipe to an AI agent
+perf-profiler run -- node script.js arg1       # profile a command
+```
+
+`run` executes the command directly via `spawn(..., { shell: false })` — no shell re-parsing, and the child's exit code is propagated. On Windows, use `cmd /c` or `powershell -Command` when you need shell features or `.cmd`/`.bat` shims. Child CPU time and peak RSS are sampled from `/proc` on Linux; other platforms report `n/a (Linux only)`.
+
+## AI-Friendly Reports
+
+The JSON report is the contract between this tool and your AI agent or harness. It is stable, versioned (`perf-profiler/report@1`), and includes everything needed to triage a performance issue without reading raw logs.
 
 ```json
 {
@@ -70,10 +164,22 @@ perf-profiler run --json -- npm test             # 输出 AI 友好 JSON
   "mode": "query",
   "totals": { "totalMs": 733.7, "checkpointCount": 19 },
   "checkpoints": [
-    { "name": "query_user_input_received", "totalMs": 0, "deltaMs": 0, "rssBytes": 52848230, "heapUsedBytes": 6029304 }
+    {
+      "name": "query_user_input_received",
+      "totalMs": 0,
+      "deltaMs": 0,
+      "rssBytes": 52848230,
+      "heapUsedBytes": 6029304
+    }
   ],
   "phases": [
-    { "name": "Tool schemas", "start": "query_tool_schema_build_start", "end": "query_tool_schema_build_end", "durationMs": 78, "sharePct": 10.6 }
+    {
+      "name": "Tool schemas",
+      "start": "query_tool_schema_build_start",
+      "end": "query_tool_schema_build_end",
+      "durationMs": 78,
+      "sharePct": 10.6
+    }
   ],
   "anomalies": [
     {
@@ -86,7 +192,12 @@ perf-profiler run --json -- npm test             # 输出 AI 友好 JSON
     }
   ],
   "bottlenecks": [
-    { "name": "Network TTFB", "durationMs": 171, "sharePct": 23.3, "suggestion": "Check endpoint latency, connection keep-alive, compression, and request timeouts." }
+    {
+      "name": "Network TTFB",
+      "durationMs": 171,
+      "sharePct": 23.3,
+      "suggestion": "Check endpoint latency, connection keep-alive, compression, and request timeouts."
+    }
   ],
   "summary": "TTFT 437.8ms: pre-request overhead 268.6ms (61.4%), network latency 169.2ms (38.6%)",
   "suggestions": [
@@ -96,51 +207,65 @@ perf-profiler run --json -- npm test             # 输出 AI 友好 JSON
 }
 ```
 
-关键字段：
+### Report fields
 
-| 字段 | 说明 |
+| Field | Description |
 | --- | --- |
-| `checkpoints` | 每个检查点的累计耗时 / 相邻间隔 / 内存快照（详细模式） |
-| `phases` | 语义化阶段（context loading、tool schemas、network TTFB…）及占比 |
-| `anomalies` | 自动检测的异常：`severity`（critical/warning/info）、原因、阈值、修复建议 |
-| `bottlenecks` | 按耗时排序的前 5 个阶段，各带针对性建议 |
-| `summary` | 一句话总结（如 TTFT 中网络延迟 vs 本地开销的占比） |
-| `suggestions` | 去重后的修复建议列表，AI 可直接按序执行 |
+| `checkpoints` | Per-checkpoint cumulative time, delta, and memory snapshot (detailed mode) |
+| `phases` | Semantic phases (context loading, tool schemas, network TTFB, ...) with duration and share |
+| `anomalies` | Detected issues: severity, reason, threshold, and a concrete fix suggestion |
+| `bottlenecks` | Top 5 phases ranked by duration, each with a targeted suggestion |
+| `summary` | One-line verdict (e.g. TTFT split between local overhead and network latency) |
+| `suggestions` | Deduplicated, actionable suggestions an AI can execute in order |
 
-异常阈值：
+### Anomaly thresholds
 
-| 条件 | 严重度 |
+| Condition | Severity |
 | --- | --- |
-| 检查点间隔 > 1000ms | critical |
-| 检查点间隔 > 100ms | warning |
-| 已知瓶颈（tool schema / client creation / git status）> 50ms | warning |
-| 查询网络延迟 > 1000ms（query 模式） | critical |
-| 查询网络延迟 > 300ms（query 模式） | warning |
-| 首次响应 TTFR > 2000ms（headless 模式） | critical |
-| 堆内存 > 512MB | warning |
+| Checkpoint delta > 1000ms | `critical` |
+| Checkpoint delta > 100ms | `warning` |
+| Known bottleneck (tool schema / client creation / git status) > 50ms | `warning` |
+| Network latency > 1000ms (query) | `critical` |
+| Network latency > 300ms (query) | `warning` |
+| Time to first response > 2000ms (headless) | `critical` |
+| Query overhead > 500ms (headless) | `warning` |
+| Heap usage > 512MB | `warning` |
+| Non-zero exit code (run) | `critical` |
 
-## 作为库使用
+Thresholds and suggestion texts live in [`src/analyze.ts`](src/analyze.ts) and are easy to tune for your workload.
+
+## Library API
+
+### Startup profiler
 
 ```ts
 import { profileCheckpoint, profileReport, getStartupAiReport } from 'perf-profiler'
 
-// 任意初始化阶段打点（需先设 PERF_PROFILE_STARTUP=1）
 profileCheckpoint('app_entry')
-profileCheckpoint('app_imports_loaded')
-profileReport() // 写 <output-dir>/<sessionId>.txt 和 .json
-
-const report = getStartupAiReport() // 直接拿 AI 友好 JSON 数据
+profileCheckpoint('app_ready')
+profileReport()
+const report = getStartupAiReport() // AiReport | null
 ```
 
+### Query profiler
+
 ```ts
-import { startQueryProfile, queryCheckpoint, endQueryProfile, getQueryAiReport } from 'perf-profiler'
+import {
+  startQueryProfile,
+  queryCheckpoint,
+  endQueryProfile,
+  getQueryAiReport,
+} from 'perf-profiler'
+
 startQueryProfile()
 queryCheckpoint('query_context_loading_start')
-// ... 查询管线各阶段
+// ... pipeline stages ...
 queryCheckpoint('query_first_chunk_received') // TTFT
 endQueryProfile()
 const report = getQueryAiReport()
 ```
+
+### Headless profiler
 
 ```ts
 import {
@@ -149,6 +274,7 @@ import {
   headlessProfilerCheckpoint,
   getHeadlessAiReport,
 } from 'perf-profiler'
+
 setNonInteractiveSession(true)
 headlessProfilerStartTurn()
 headlessProfilerCheckpoint('query_started')
@@ -156,20 +282,53 @@ headlessProfilerCheckpoint('first_chunk')
 const report = getHeadlessAiReport()
 ```
 
-遥测默认完全关闭；如需上报指标，可用 `setAnalyticsSink((event, metadata) => ...)` 挂接（事件名 `startup_perf` / `headless_latency`）。
+### Telemetry sink
 
-## 环境变量
+Telemetry is off by default. Attach your own sink to receive phase metrics:
 
-| 变量 | 说明 |
-| --- | --- |
-| `PERF_PROFILE_STARTUP=1` | 开启详细启动 / headless 检测（确定性启用，无采样） |
-| `PERF_PROFILE_QUERY=1` | 开启查询检测 |
-| `PERF_OUTPUT_DIR=<dir>` | 报告输出目录（默认 `<config-home>/reports`） |
-| `PERF_CONFIG_DIR=<dir>` | 配置目录（默认 `~/.perf-profiler`） |
-| `PERF_DEBUG=1` / `--debug` | 调试日志输出到 stderr |
+```ts
+import { setAnalyticsSink } from 'perf-profiler'
 
-## 测试
-
-```bash
-bun test ./test/smoke.test.js
+setAnalyticsSink((event, metadata) => {
+  // event: "startup_perf" | "headless_latency"
+  console.log(event, metadata)
+})
 ```
+
+## Configuration
+
+All configuration is environment-based so it works identically in CI and local harnesses:
+
+| Variable | Description |
+| --- | --- |
+| `PERF_PROFILE_STARTUP=1` | Enable startup / headless profiling (deterministic, no sampling) |
+| `PERF_PROFILE_QUERY=1` | Enable query profiling |
+| `PERF_OUTPUT_DIR=<dir>` | Report output directory (default `<config-home>/reports`) |
+| `PERF_CONFIG_DIR=<dir>` | Config home (default `~/.perf-profiler`) |
+| `PERF_DEBUG=1` / `--debug` | Write debug logs to stderr |
+
+## How It Works
+
+```text
+Instrument                     Analyze                          Report
+────────────────────────      ──────────────────────────       ───────────────────────────
+profileCheckpoint(name)   →   checkpoints + phases        →   <sessionId>.txt  (human)
+       │                       anomalies (severity,             <sessionId>.json (AI)
+       ▼                       thresholds, suggestions)
+perf_hooks marks +        →   bottlenecks (top 5)         →   perf-profiler/report@1
+memory snapshots
+```
+
+All three profilers share the same perf_hooks timeline (`getPerformance()` in [`src/base.ts`](src/base.ts)) and feed the same analysis pipeline ([`src/analyze.ts`](src/analyze.ts)), so the output format is consistent whether you profile startup, a query, or a headless turn.
+
+## Contributing
+
+Contributions are welcome! Keep it simple:
+
+1. Fork the repository and create a feature branch.
+2. Run `bun run build` and `bun test ./test/smoke.test.js` before submitting.
+3. Open a pull request describing the change and any threshold/schema updates.
+
+## License
+
+[MIT](LICENSE)
