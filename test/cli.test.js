@@ -11,11 +11,11 @@ import {
   buildRunReport,
   parseCommand,
   parseFlags,
-} from '../src/cli.ts'
+} from '../dist/cli.js'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const repoRoot = join(here, '..')
-const cli = join(repoRoot, 'src', 'cli.ts')
+const cli = join(repoRoot, 'dist', 'cli.js')
 
 function runCli(args) {
   return spawnSync(process.execPath, [cli, ...args], {

@@ -3,20 +3,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isEnvTruthy, firstEnvTruthy } from '../src/env.js'
+import { isEnvTruthy, firstEnvTruthy } from '../dist/env.js'
 import {
   getConfigHomeDir,
   getOutputDir,
   getSessionId,
   setSessionId,
-} from '../src/config.js'
-import { formatFileSize } from '../src/format.js'
-import { setAnalyticsSink, logEvent } from '../src/analytics.js'
+} from '../dist/config.js'
+import { formatFileSize } from '../dist/format.js'
+import { setAnalyticsSink, logEvent } from '../dist/analytics.js'
 import {
   setDebugEnabled,
   isDebugEnabled,
   logForDebugging,
-} from '../src/logger.js'
+} from '../dist/logger.js'
 
 test('isEnvTruthy handles all documented forms', () => {
   assert.equal(isEnvTruthy(undefined), false)
@@ -75,7 +75,7 @@ test('session id is stable once set and UUID-generated otherwise', async () => {
   assert.equal(getSessionId(), 'fixed-id')
 
   // Fresh module instance (cache-busted import) has no session id yet.
-  const fresh = await import(`../src/config.ts?fresh=${Date.now()}`)
+  const fresh = await import(`../dist/config.js?fresh=${Date.now()}`)
   const generated = fresh.getSessionId()
   assert.match(generated, /^[0-9a-f-]{36}$/)
 })
@@ -126,7 +126,7 @@ test('debug logger writes to stderr only when enabled', () => {
 })
 
 test('package index re-exports the public API', async () => {
-  const api = await import('../src/index.ts')
+  const api = await import('../dist/index.js')
   const exported = [
     'profileCheckpoint',
     'profileReport',

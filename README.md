@@ -2,7 +2,7 @@
 
 > Checkpoint-based performance profiler that turns timing data into actionable, AI-friendly reports.
 
-![Bun](https://img.shields.io/badge/bun-%3E%3D1.3-black?logo=bun&logoColor=white)
+![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&logoColor=white)
 ![ESM](https://img.shields.io/badge/ESM-supported-4fc921)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -13,14 +13,14 @@
 - a **human-readable timeline** with RSS/heap memory snapshots and slow-operation warnings;
 - an **AI-friendly JSON report** (`perf-profiler/report@1`) with detected anomalies, ranked bottlenecks, and concrete fix suggestions an AI agent can act on directly.
 
-No telemetry, no hidden sampling, no runtime dependencies — just a single self-contained binary.
+No telemetry, no hidden sampling, no runtime dependencies — just a small ESM package.
 
 ## Features
 
 - **AI-native output** — fixed JSON schema with severity, thresholds, reasons, and fix suggestions, designed to be piped straight into an AI agent or harness.
 - **Three profilers, one tool** — startup phases, query pipeline (TTFT), and headless per-turn latency share the same perf_hooks timeline and report format.
 - **Memory-aware** — RSS and heap snapshots at every checkpoint in detailed mode.
-- **Zero dependencies** — compiled with [Bun](https://bun.sh) into a single binary; no Node or package install required at runtime.
+- **Zero dependencies** — compiled to plain ESM with TypeScript; works on Node ≥ 18 and Bun.
 - **Deterministic** — enabled explicitly via `PERF_PROFILE_*` env vars; no hidden sampling, no background telemetry.
 - **Harness-friendly** — raw JSON piping (`--json`), exit-code propagation, and stable file outputs under one directory.
 
@@ -38,41 +38,53 @@ No telemetry, no hidden sampling, no runtime dependencies — just a single self
 
 ## Install
 
-### Binary (recommended)
+### In a project (recommended)
 
-Download the prebuilt binary for your platform from the [Releases](https://github.com/HelloGGX/pref-profiler/releases) page, or build it yourself:
+Install as a project-level dev dependency, so the `perf` command is available to
+your scripts and CI without polluting global state:
 
 ```bash
-bun run build
-./bin/perf-profiler --help        # Windows: .\bin\perf-profiler.exe --help
+npm install --save-dev perf-profiler
 ```
 
-The build produces `bin/perf-profiler` on macOS/Linux and `bin/perf-profiler.exe` on Windows — a single executable with the Bun runtime embedded.
+Then use it directly, or via `npx`:
+
+```bash
+npx perf --help
+perf run -- npm test
+```
+
+Both command names are installed: `perf` for daily use, and `perf-profiler` as a
+collision-free full name — use it if `perf` already exists on your PATH (e.g.
+Linux's kernel profiler). You can also install globally with
+`npm install -g perf-profiler` if you prefer.
 
 ### From source
 
 ```bash
 git clone https://github.com/HelloGGX/pref-profiler.git
 cd pref-profiler
-bun run build                     # requires Bun >= 1.3
+npm install
+npm run build                     # emits dist/ via TypeScript
+node dist/cli.js --help
 ```
 
 ### As a library
 
 ```bash
-bun add perf-profiler             # from a registry, or:
-bun add github:HelloGGX/pref-profiler
+npm install perf-profiler
 ```
 
-The package exports its TypeScript source directly, so the library API works under Bun without a build step.
+The package ships compiled ESM plus TypeScript declarations (`dist/`), so the
+library API works in Node ≥ 18 and in Bun.
 
 ## Quick Start
 
 ### Profile any command
 
 ```bash
-perf-profiler run -- npm test
-perf-profiler run --json -- npm test    # AI-friendly JSON report
+perf run -- npm test
+perf run --json -- npm test    # AI-friendly JSON report
 ```
 
 ```text
@@ -115,13 +127,13 @@ Run it and inspect the JSON:
 
 ```bash
 PERF_PROFILE_STARTUP=1 node your-app.js
-perf-profiler report --dir ~/.perf-profiler/reports
+perf report --dir ~/.perf-profiler/reports
 ```
 
 ## CLI Reference
 
 ```text
-perf-profiler <command> [options]
+perf <command> [options]
 ```
 
 | Command | Description |
@@ -143,11 +155,11 @@ perf-profiler <command> [options]
 ### Examples
 
 ```bash
-perf-profiler demo --query                     # text report with TTFT breakdown
-perf-profiler demo --query --json              # same demo, AI-friendly JSON
-perf-profiler demo --headless                  # per-turn latency metrics
-perf-profiler report --dir /tmp/perf --json    # raw JSON, pipe to an AI agent
-perf-profiler run -- node script.js arg1       # profile a command
+perf demo --query                     # text report with TTFT breakdown
+perf demo --query --json              # same demo, AI-friendly JSON
+perf demo --headless                  # per-turn latency metrics
+perf report --dir /tmp/perf --json    # raw JSON, pipe to an AI agent
+perf run -- node script.js arg1       # profile a command
 ```
 
 `run` executes the command directly via `spawn(..., { shell: false })` — no shell re-parsing, and the child's exit code is propagated. On Windows, use `cmd /c` or `powershell -Command` when you need shell features or `.cmd`/`.bat` shims. Child CPU time and peak RSS are sampled from `/proc` on Linux; other platforms report `n/a (Linux only)`.
@@ -326,7 +338,7 @@ All three profilers share the same perf_hooks timeline (`getPerformance()` in [`
 Contributions are welcome! Keep it simple:
 
 1. Fork the repository and create a feature branch.
-2. Run `bun run build` and `bun test ./test/` before submitting.
+2. Run `npm run build` and `npm test` before submitting.
 3. Open a pull request describing the change and any threshold/schema updates.
 
 ## License

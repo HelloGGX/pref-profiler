@@ -16,7 +16,7 @@ test.after(() => {
 })
 
 test('startup profiler is inert when disabled', async () => {
-  const startup = await import(`../src/startup.ts?disabled=${Date.now()}`)
+  const startup = await import(`../dist/startup.js?disabled=${Date.now()}`)
   startup.profileCheckpoint('cli_entry')
   startup.profileReport()
   assert.equal(startup.getStartupAiReport(), null)
@@ -24,7 +24,7 @@ test('startup profiler is inert when disabled', async () => {
 })
 
 test('query profiler is inert when disabled', async () => {
-  const query = await import(`../src/query.ts?disabled=${Date.now()}`)
+  const query = await import(`../dist/query.js?disabled=${Date.now()}`)
   query.startQueryProfile()
   query.queryCheckpoint('query_context_loading_start')
   query.endQueryProfile()
@@ -33,7 +33,7 @@ test('query profiler is inert when disabled', async () => {
 })
 
 test('headless profiler is inert when disabled', async () => {
-  const headless = await import(`../src/headless.ts?disabled=${Date.now()}`)
+  const headless = await import(`../dist/headless.js?disabled=${Date.now()}`)
   headless.setNonInteractiveSession(true)
   headless.headlessProfilerStartTurn()
   headless.headlessProfilerCheckpoint('first_chunk')
@@ -44,7 +44,7 @@ test('headless profiler is inert when disabled', async () => {
 test('headless profiler requires the non-interactive opt-in even when enabled', async () => {
   process.env.PERF_PROFILE_STARTUP = '1'
   try {
-    const headless = await import(`../src/headless.ts?optin=${Date.now()}`)
+    const headless = await import(`../dist/headless.js?optin=${Date.now()}`)
     headless.headlessProfilerStartTurn()
     headless.headlessProfilerCheckpoint('first_chunk')
     assert.equal(headless.getHeadlessTurnMetrics(), null)

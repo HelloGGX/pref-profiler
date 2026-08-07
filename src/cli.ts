@@ -14,9 +14,16 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
 import { getOutputDir, setSessionId } from './config.js'
 import { formatMs, formatTimelineLine, getPerformance } from './base.js'
 import { formatFileSize } from './format.js'
@@ -570,8 +577,23 @@ async function main(): Promise<void> {
   }
 }
 
-// Run only when executed as the entry point so tests can import this module
-// to exercise its exported helpers without starting the CLI.
-if (import.meta.main) {
+/**
+ * True when this module is the process entry point.
+ *
+ * Uses realpath so the check also works when launched through an npm bin
+ * symlink (node_modules/.bin/perf). Tests import this module
+ * directly, so the CLI only starts when actually executed.
+ */
+function isEntryPoint(): boolean {
+  const arg1 = process.argv[1]
+  if (!arg1) return false
+  try {
+    return realpathSync(arg1) === fileURLToPath(import.meta.url)
+  } catch {
+    return false
+  }
+}
+
+if (isEntryPoint()) {
   void main()
 }

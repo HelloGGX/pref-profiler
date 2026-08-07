@@ -8,7 +8,7 @@ import {
   marksToCheckpoints,
   phasesFromCheckpoints,
   suggestForPhase,
-} from '../src/analyze.js'
+} from '../dist/analyze.js'
 
 const MB = 1024 * 1024
 

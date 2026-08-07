@@ -8,9 +8,9 @@ import assert from 'node:assert/strict'
 process.env.PERF_PROFILE_STARTUP = '1'
 process.env.PERF_PROFILE_QUERY = '1'
 
-const startup = await import(`../src/startup.ts?isolation=${Date.now()}`)
-const query = await import(`../src/query.ts?isolation=${Date.now()}`)
-const headless = await import(`../src/headless.ts?isolation=${Date.now()}`)
+const startup = await import(`../dist/startup.js?isolation=${Date.now()}`)
+const query = await import(`../dist/query.js?isolation=${Date.now()}`)
+const headless = await import(`../dist/headless.js?isolation=${Date.now()}`)
 
 const startupNames = () =>
   startup.getStartupAiReport().checkpoints.map(c => c.name)

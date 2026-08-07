@@ -9,7 +9,7 @@ process.env.PERF_OUTPUT_DIR = join(tmp, 'startup-perf')
 
 test('base helpers', async () => {
   const { formatMs, formatTimelineLine, getPerformance } = await import(
-    `../src/base.ts?smoke-base=${Date.now()}`
+    `../dist/base.js?smoke-base=${Date.now()}`
   )
   assert.equal(formatMs(1.234567), '1.235')
   const line = formatTimelineLine(1000, 250, 'phase', undefined, 8, 7)
@@ -19,8 +19,8 @@ test('base helpers', async () => {
 
 test('startup profiler: checkpoints + report file', async () => {
   process.env.PERF_PROFILE_STARTUP = '1'
-  const startup = await import(`../src/startup.ts?smoke-startup=${Date.now()}`)
-  const { setSessionId } = await import('../src/config.ts')
+  const startup = await import(`../dist/startup.js?smoke-startup=${Date.now()}`)
+  const { setSessionId } = await import('../dist/config.js')
 
   setSessionId('smoke-startup')
   startup.profileCheckpoint('cli_entry')
@@ -54,7 +54,7 @@ test('startup profiler: checkpoints + report file', async () => {
 
 test('query profiler: TTFT report', async () => {
   process.env.PERF_PROFILE_QUERY = '1'
-  const query = await import(`../src/query.ts?smoke-query=${Date.now()}`)
+  const query = await import(`../dist/query.js?smoke-query=${Date.now()}`)
 
   query.startQueryProfile()
   query.queryCheckpoint('query_context_loading_start')
@@ -77,7 +77,7 @@ test('query profiler: TTFT report', async () => {
 
 test('headless profiler: per-turn metrics', async () => {
   process.env.PERF_PROFILE_STARTUP = '1'
-  const headless = await import(`../src/headless.ts?smoke-headless=${Date.now()}`)
+  const headless = await import(`../dist/headless.js?smoke-headless=${Date.now()}`)
   headless.setNonInteractiveSession(true)
 
   headless.headlessProfilerStartTurn()

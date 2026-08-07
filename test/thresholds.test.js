@@ -3,14 +3,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { setAnalyticsSink } from '../src/analytics.js'
-import { setDebugEnabled } from '../src/logger.js'
+import { setAnalyticsSink } from '../dist/analytics.js'
+import { setDebugEnabled } from '../dist/logger.js'
 
 process.env.PERF_PROFILE_QUERY = '1'
 process.env.PERF_PROFILE_STARTUP = '1'
 
-const query = await import(`../src/query.ts?thresholds=${Date.now()}`)
-const headless = await import(`../src/headless.ts?thresholds=${Date.now()}`)
+const query = await import(`../dist/query.js?thresholds=${Date.now()}`)
+const headless = await import(`../dist/headless.js?thresholds=${Date.now()}`)
 
 test('query report flags VERY SLOW deltas and AI report marks critical', async () => {
   query.startQueryProfile()
