@@ -22,3 +22,4 @@ export {
 export { logForDebugging, setDebugEnabled } from './logger.js'
 export { setAnalyticsSink, type AnalyticsSink } from './analytics.js'
 export { formatFileSize } from './format.js'
+export { emitCliError, type CliErrorReport, type CliErrorType } from './error.js'

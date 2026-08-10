@@ -127,10 +127,55 @@ test('run profiles a child and propagates its exit code', () => {
   assert.equal(report.anomalies[0].severity, 'critical')
 })
 
-test('unknown command prints an error', () => {
+test('run --json emits an AI-friendly error report on spawn failure', () => {
+  const r = runCli(['run', '--json', '--', 'definitely-not-a-command-xyz'])
+  assert.equal(r.status, 1)
+  const report = JSON.parse(r.stdout)
+  assert.equal(report.schema, 'perf-profiler/error@1')
+  assert.equal(report.errorType, 'spawn_failed')
+  assert.match(report.location, /definitely-not-a-command-xyz/)
+  assert.ok(report.suggestion.length > 0)
+})
+
+test('run --json keeps stdout machine-readable and captures child output', () => {
+  const r = runCli([
+    'run',
+    '--json',
+    '--',
+    process.execPath,
+    '-e',
+    'console.log("child-out"); console.error("child-err"); process.exit(5)',
+  ])
+  assert.equal(r.status, 5)
+  const report = JSON.parse(r.stdout) // stdout must be pure JSON
+  assert.equal(report.schema, 'perf-profiler/report@1')
+  assert.equal(report.totals.exitCode, 5)
+  assert.equal(report.error.errorType, 'nonzero_exit')
+  assert.match(report.error.stdoutTail, /child-out/)
+  assert.match(report.error.stderrTail, /child-err/)
+  assert.match(r.stderr, /child-err/) // child output forwarded to stderr
+})
+
+test('unknown command prints an error and exits non-zero', () => {
   const r = runCli(['does-not-exist'])
-  assert.equal(r.status, 0)
-  assert.match(r.stderr, /Unknown command: does-not-exist/)
+  assert.equal(r.status, 2)
+  assert.match(r.stderr, /Error \[invalid_args\]: Unknown command: does-not-exist/)
+
+  const json = runCli(['does-not-exist', '--json'])
+  assert.equal(json.status, 2)
+  const report = JSON.parse(json.stdout)
+  assert.equal(report.schema, 'perf-profiler/error@1')
+  assert.equal(report.errorType, 'invalid_args')
+  assert.equal(report.message, 'Unknown command: does-not-exist')
+})
+
+test('report --json emits an error report for a missing file', () => {
+  const r = runCli(['report', '--json', '/tmp/does-not-exist-pp.json'])
+  assert.equal(r.status, 1)
+  const report = JSON.parse(r.stdout)
+  assert.equal(report.schema, 'perf-profiler/error@1')
+  assert.equal(report.errorType, 'file_not_found')
+  assert.match(report.location, /does-not-exist-pp\.json/)
 })
 
 test('parseCommand recognizes commands and help/version aliases', () => {
@@ -149,7 +194,11 @@ test('parseCommand recognizes commands and help/version aliases', () => {
   assert.deepEqual(parseCommand(['-h']), { command: 'help', rest: [] })
   assert.deepEqual(parseCommand(['--version']), { command: 'version', rest: [] })
   assert.deepEqual(parseCommand(['-v']), { command: 'version', rest: [] })
-  assert.deepEqual(parseCommand(['bogus']), { command: 'help', rest: [] })
+  assert.deepEqual(parseCommand(['bogus']), {
+    command: 'error',
+    rest: [],
+    error: 'Unknown command: bogus',
+  })
 })
 
 test('parseFlags handles flags, values, positionals and -- rest', () => {
@@ -192,8 +241,31 @@ test('buildRunReport flags non-zero exit and CPU utilization', () => {
   // 10ms CPU over 100ms wall = 10% -> low utilization info anomaly.
   assert.ok(report.anomalies.some(a => a.severity === 'info'))
   assert.match(report.summary, /finished in 100\.0ms with exit code 2/)
+  assert.equal(report.error.errorType, 'nonzero_exit')
 
   const clean = buildRunReport('node', marks, 0, 100, 0, null)
   assert.equal(clean.anomalies.length, 0)
   assert.equal(clean.totals.exitCode, 0)
+  assert.equal(clean.error, undefined)
+})
+
+test('buildRunReport attaches captured child output to the error', () => {
+  const marks = [
+    { name: 'run_start', startTime: 0 },
+    { name: 'run_spawned', startTime: 10 },
+    { name: 'run_exit', startTime: 100 },
+  ]
+  const report = buildRunReport(
+    'node',
+    marks,
+    0,
+    100,
+    2,
+    null,
+    'stdout tail\n',
+    'stderr tail\n',
+  )
+  assert.equal(report.error.errorType, 'nonzero_exit')
+  assert.equal(report.error.stdoutTail, 'stdout tail\n')
+  assert.equal(report.error.stderrTail, 'stderr tail\n')
 })

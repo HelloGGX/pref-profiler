@@ -243,6 +243,30 @@ JSON 报告是该工具与你的 AI agent 或 harness 之间的契约。它稳�
 
 阈值和建议文本位于 [`src/analyze.ts`](src/analyze.ts)，你可以根据工作负载轻松调整。
 
+### 错误报告
+
+失败时命令一定以非零退出码结束；配合 `--json`，CLI 会输出可解析的错误文档，而不是临时拼凑的文本。这是失败命令的契约：
+
+```json
+{
+  "schema": "perf-profiler/error@1",
+  "errorType": "spawn_failed",
+  "message": "Failed to start command: spawn ./missing ENOENT",
+  "location": "run -- ./missing",
+  "exitCode": 1,
+  "suggestion": "Check that the command exists and is executable (e.g. `command -v <cmd>`)."
+}
+```
+
+| `errorType` | 含义 |
+| --- | --- |
+| `invalid_args` | 未知命令/选项，或选项缺少值 |
+| `spawn_failed` | 无法启动被分析的命令 |
+| `file_not_found` | 请求的报告文件不存在 |
+| `internal` | CLI 内部意外异常 |
+
+每份错误报告都回答同一个三连问：`message`（错误是什么）、`location`（错误在哪里）、捕获到的 `stdoutTail`/`stderrTail` 加 `suggestion`（为什么错、下一步怎么做）。对于 `run`，子进程非零退出时仍然输出正常的 `perf-profiler/report@1`，并把捕获到的子进程输出挂在 `report.error` 上；`--json` 模式下子进程的 stdout/stderr 被转发到 stderr，保证 stdout 始终是干净的机器可读输出。
+
 ## 库 API
 
 ### 启动分析器

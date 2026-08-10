@@ -40,6 +40,20 @@ export type Anomaly = {
   suggestion: string
 }
 
+/**
+ * Failure details attached to a run report when the profiled command fails
+ * (spawn failure or non-zero exit). Carries the captured child output so an
+ * AI agent can see *why* it failed without re-running the command.
+ */
+export type ReportErrorInfo = {
+  errorType: 'spawn_failed' | 'nonzero_exit'
+  /** What the error is. */
+  message: string
+  /** Tail of the child's stdout/stderr that explains the failure. */
+  stdoutTail?: string
+  stderrTail?: string
+}
+
 export type AiReport = {
   schema: 'perf-profiler/report@1'
   generatedAt: string
@@ -63,6 +77,8 @@ export type AiReport = {
   }>
   summary: string
   suggestions: string[]
+  /** Present only when the profiled command failed. */
+  error?: ReportErrorInfo
 }
 
 const DEFAULT_SLOW_MS = 100
@@ -134,6 +150,7 @@ export type BuildReportInput = {
   cpuMs?: number
   summaryOverride?: string
   extraAnomalies?: Anomaly[]
+  error?: ReportErrorInfo
 }
 
 /**
@@ -258,6 +275,7 @@ export function buildReport(input: BuildReportInput): AiReport {
     bottlenecks,
     summary,
     suggestions: [...suggestions],
+    ...(input.error ? { error: input.error } : {}),
   }
 }
 

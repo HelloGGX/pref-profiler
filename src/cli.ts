@@ -30,9 +30,11 @@ import { formatFileSize } from './format.js'
 import {
   type AiReport,
   type Anomaly,
+  type ReportErrorInfo,
   buildReport,
   marksToCheckpoints,
 } from './analyze.js'
+import { emitCliError } from './error.js'
 
 const USAGE = `perf-profiler - checkpoint-based performance profiler
 
@@ -53,6 +55,11 @@ Commands:
                        The child's exit code is propagated.
   help                 Show this help.
 
+Errors (unknown commands, missing files, failed spawns, internal exceptions)
+also emit a structured, AI-friendly report: with --json the CLI prints a
+perf-profiler/error@1 document on stdout; otherwise a readable summary on
+stderr. All failures exit non-zero.
+
 Environment:
   PERF_PROFILE_STARTUP=1        Enable detailed startup/headless profiling
   PERF_PROFILE_QUERY=1          Enable query profiling
@@ -65,6 +72,7 @@ type CliCommand =
   | 'demo'
   | 'report'
   | 'run'
+  | 'error'
   | 'help'
   | 'version'
 
@@ -106,6 +114,7 @@ function readProcSample(pid: number | undefined): ProcSample | null {
 export function parseCommand(argv: string[]): {
   command: CliCommand
   rest: string[]
+  error?: string
 } {
   const command = argv[0]
   if (!command || command === 'help' || command === '--help' || command === '-h') {
@@ -117,15 +126,20 @@ export function parseCommand(argv: string[]): {
   if (command === 'demo' || command === 'report' || command === 'run') {
     return { command, rest: argv.slice(1) }
   }
-  // Unknown command: treat as error, print usage
-  console.error(`Unknown command: ${command}`)
-  return { command: 'help', rest: [] }
+  // Unknown command: treat as a structured error instead of silently showing
+  // help, so harnesses get a non-zero exit code and a parseable report.
+  return { command: 'error', rest: [], error: `Unknown command: ${command}` }
 }
 
 export function parseFlags(
   args: string[],
   flagSpec: Record<string, 'flag' | 'value'>,
-): { flags: Record<string, string | boolean>; positionals: string[]; rest: string[] } {
+): {
+  flags: Record<string, string | boolean>
+  positionals: string[]
+  rest: string[]
+  error?: string
+} {
   const flags: Record<string, string | boolean> = {}
   const positionals: string[] = []
   let rest: string[] = []
@@ -151,9 +165,12 @@ export function parseFlags(
       if (spec === 'value') {
         const value = eq === -1 ? args[++i] : arg.slice(eq + 1)
         if (value === undefined) {
-          console.error(`Option --${name} requires a value`)
-          process.exitCode = 1
-          return { flags, positionals, rest }
+          return {
+            flags,
+            positionals,
+            rest,
+            error: `Option --${name} requires a value`,
+          }
         }
         flags[name] = value
       } else {
@@ -324,7 +341,18 @@ async function cmdReport(
 
   for (const file of files) {
     if (!existsSync(file)) {
-      console.error(`File not found: ${file}`)
+      emitCliError(
+        {
+          schema: 'perf-profiler/error@1',
+          errorType: 'file_not_found',
+          message: `File not found: ${file}`,
+          location: `report ${file}`,
+          exitCode: 1,
+          suggestion:
+            'Check the report path, or run `perf-profiler demo` to generate a report first.',
+        },
+        { json: jsonOnly },
+      )
       continue
     }
     const isJson = file.toLowerCase().endsWith('.json')
@@ -354,10 +382,29 @@ function listReportFiles(dir: string): string[] {
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
 }
 
+/**
+ * Append a chunk to a bounded tail buffer, keeping only the last maxBytes.
+ */
+function appendTail(tail: Buffer, chunk: Buffer, maxBytes: number): Buffer {
+  const combined = Buffer.concat([tail, chunk])
+  return combined.length > maxBytes
+    ? combined.subarray(-maxBytes)
+    : combined
+}
+
 async function cmdRun(rest: string[], json: boolean): Promise<void> {
   if (rest.length === 0) {
-    console.error('Usage: perf-profiler run -- <command> [args...]')
-    process.exitCode = 1
+    emitCliError(
+      {
+        schema: 'perf-profiler/error@1',
+        errorType: 'invalid_args',
+        message: 'No command given',
+        location: 'run',
+        exitCode: 2,
+        suggestion: 'Usage: perf-profiler run -- <command> [args...]',
+      },
+      { json },
+    )
     return
   }
 
@@ -373,7 +420,9 @@ async function cmdRun(rest: string[], json: boolean): Promise<void> {
 
   checkpoint('run_start')
   const child = spawn(command!, args, {
-    stdio: 'inherit',
+    // stdin stays inherited; stdout/stderr are piped so we can capture a tail
+    // for the failure report while still forwarding output to the user.
+    stdio: ['inherit', 'pipe', 'pipe'],
     // No shell: the command is executed directly with its args, so quoting is
     // predictable and no shell-injection/deprecation warnings apply. On
     // Windows, use `cmd /c` or `powershell -Command` explicitly when shell
@@ -381,6 +430,27 @@ async function cmdRun(rest: string[], json: boolean): Promise<void> {
     shell: false,
   })
   checkpoint('run_spawned')
+
+  // Keep a bounded tail of child output so the AI report can say *why* the
+  // command failed (stack trace, compile error, ...) without re-running it.
+  const MAX_TAIL_BYTES = 8 * 1024
+  let stdoutTailBuf: Buffer = Buffer.alloc(0)
+  let stderrTailBuf: Buffer = Buffer.alloc(0)
+
+  child.stdout!.on('data', (chunk: Buffer) => {
+    if (json) {
+      // Keep stdout machine-readable: child output is forwarded to stderr
+      // instead of polluting the JSON report.
+      process.stderr.write(chunk)
+    } else {
+      process.stdout.write(chunk)
+    }
+    stdoutTailBuf = appendTail(stdoutTailBuf, chunk, MAX_TAIL_BYTES)
+  })
+  child.stderr!.on('data', (chunk: Buffer) => {
+    process.stderr.write(chunk)
+    stderrTailBuf = appendTail(stderrTailBuf, chunk, MAX_TAIL_BYTES)
+  })
 
   // Sample child CPU/RSS while it runs (Linux only). The final reading is
   // taken after exit; the polled value is the fallback for short processes.
@@ -390,23 +460,41 @@ async function cmdRun(rest: string[], json: boolean): Promise<void> {
     if (sample) lastSample = sample
   }, 250)
 
-  const exitCode = await new Promise<number | null>(resolve => {
-    child.on('error', err => {
-      console.error(
-        `Failed to start command: ${err.message}` +
-          (process.platform === 'win32'
-            ? ' (on Windows, .cmd/.bat shims need `perf-profiler run -- cmd /c <script>`)'
-            : ''),
-      )
-      resolve(null)
+  const outcome = await new Promise<{
+    exitCode: number | null
+    error: NodeJS.ErrnoException | null
+  }>(resolve => {
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      resolve({ exitCode: null, error: err })
     })
-    child.on('close', code => resolve(code))
+    child.on('close', code => resolve({ exitCode: code, error: null }))
   })
+  const { exitCode, error: spawnError } = outcome
 
   clearInterval(sampler)
 
   if (exitCode === null) {
-    process.exitCode = 1
+    const stdoutTail =
+      stdoutTailBuf.length > 0 ? stdoutTailBuf.toString('utf8') : undefined
+    const stderrTail =
+      stderrTailBuf.length > 0 ? stderrTailBuf.toString('utf8') : undefined
+    emitCliError(
+      {
+        schema: 'perf-profiler/error@1',
+        errorType: 'spawn_failed',
+        message: `Failed to start command: ${spawnError?.message ?? 'unknown error'}`,
+        location: `run -- ${[command, ...args].join(' ')}`,
+        exitCode: 1,
+        stdoutTail,
+        stderrTail,
+        suggestion:
+          'Check that the command exists and is executable (e.g. `command -v <cmd>`)' +
+          (process.platform === 'win32'
+            ? '; on Windows, .cmd/.bat shims need `perf-profiler run -- cmd /c <script>`.'
+            : '.'),
+      },
+      { json },
+    )
     return
   }
 
@@ -439,7 +527,20 @@ async function cmdRun(rest: string[], json: boolean): Promise<void> {
   const total = marks.at(-1) ? marks.at(-1)!.startTime - baseline : 0
 
   if (json) {
-    const report = buildRunReport(command, marks, baseline, total, exitCode, finalSample)
+    const stdoutTail =
+      stdoutTailBuf.length > 0 ? stdoutTailBuf.toString('utf8') : undefined
+    const stderrTail =
+      stderrTailBuf.length > 0 ? stderrTailBuf.toString('utf8') : undefined
+    const report = buildRunReport(
+      command,
+      marks,
+      baseline,
+      total,
+      exitCode,
+      finalSample,
+      stdoutTail,
+      stderrTail,
+    )
     console.log(JSON.stringify(report, null, 2))
     process.exitCode = exitCode ?? 1
     return
@@ -469,6 +570,8 @@ export function buildRunReport(
   wallMs: number,
   exitCode: number,
   sample: ProcSample | null,
+  stdoutTail?: string,
+  stderrTail?: string,
 ): AiReport {
   const checkpoints = marksToCheckpoints(
     marks.map(mark => ({
@@ -477,7 +580,14 @@ export function buildRunReport(
     })),
   )
   const anomalies: Anomaly[] = []
+  let error: ReportErrorInfo | undefined
   if (exitCode !== 0) {
+    error = {
+      errorType: 'nonzero_exit',
+      message: `Command exited with code ${exitCode}`,
+      ...(stdoutTail ? { stdoutTail } : {}),
+      ...(stderrTail ? { stderrTail } : {}),
+    }
     anomalies.push({
       severity: 'critical',
       checkpoint: 'run_exit',
@@ -526,6 +636,7 @@ export function buildRunReport(
     exitCode,
     extraAnomalies: anomalies,
     summaryOverride,
+    error,
   })
 }
 
@@ -534,8 +645,25 @@ function readFileAsync(path: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const { command, rest } = parseCommand(process.argv.slice(2))
+  const argv = process.argv.slice(2)
+  const jsonWanted = argv.includes('--json')
+  const { command, rest, error } = parseCommand(argv)
 
+  if (command === 'error') {
+    emitCliError(
+      {
+        schema: 'perf-profiler/error@1',
+        errorType: 'invalid_args',
+        message: error ?? 'Invalid command',
+        location: 'perf-profiler <command>',
+        exitCode: 2,
+        suggestion:
+          'Run `perf-profiler help` to list valid commands and options.',
+      },
+      { json: jsonWanted },
+    )
+    return
+  }
   if (command === 'help') {
     console.log(USAGE)
     return
@@ -546,7 +674,7 @@ async function main(): Promise<void> {
   }
 
   if (command === 'demo') {
-    const { flags } = parseFlags(rest, {
+    const { flags, error: flagError } = parseFlags(rest, {
       mode: 'value',
       startup: 'flag',
       query: 'flag',
@@ -555,6 +683,20 @@ async function main(): Promise<void> {
       out: 'value',
       'session-id': 'value',
     })
+    if (flagError) {
+      emitCliError(
+        {
+          schema: 'perf-profiler/error@1',
+          errorType: 'invalid_args',
+          message: flagError,
+          location: 'demo',
+          exitCode: 2,
+          suggestion: 'Fix the option and re-run the command.',
+        },
+        { json: jsonWanted },
+      )
+      return
+    }
     if (flags.query) flags.mode = 'query'
     if (flags.headless) flags.mode = 'headless'
     await cmdDemo(flags)
@@ -562,16 +704,46 @@ async function main(): Promise<void> {
   }
 
   if (command === 'report') {
-    const { flags, positionals } = parseFlags(rest, {
+    const { flags, positionals, error: flagError } = parseFlags(rest, {
       dir: 'value',
       json: 'flag',
     })
+    if (flagError) {
+      emitCliError(
+        {
+          schema: 'perf-profiler/error@1',
+          errorType: 'invalid_args',
+          message: flagError,
+          location: 'report',
+          exitCode: 2,
+          suggestion: 'Fix the option and re-run the command.',
+        },
+        { json: jsonWanted },
+      )
+      return
+    }
     await cmdReport(flags, positionals)
     return
   }
 
   if (command === 'run') {
-    const { flags, rest: restArgs } = parseFlags(rest, { json: 'flag' })
+    const { flags, rest: restArgs, error: flagError } = parseFlags(rest, {
+      json: 'flag',
+    })
+    if (flagError) {
+      emitCliError(
+        {
+          schema: 'perf-profiler/error@1',
+          errorType: 'invalid_args',
+          message: flagError,
+          location: 'run',
+          exitCode: 2,
+          suggestion: 'Fix the option and re-run the command.',
+        },
+        { json: jsonWanted },
+      )
+      return
+    }
     await cmdRun(restArgs, flags.json === true)
     return
   }
@@ -595,5 +767,19 @@ function isEntryPoint(): boolean {
 }
 
 if (isEntryPoint()) {
-  void main()
+  main().catch((err: unknown) => {
+    emitCliError(
+      {
+        schema: 'perf-profiler/error@1',
+        errorType: 'internal',
+        message: err instanceof Error ? err.message : String(err),
+        location: 'perf-profiler CLI',
+        exitCode: 1,
+        suggestion:
+          'Report this as a bug with the command that was run and the stack trace below.',
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+      { json: process.argv.includes('--json') },
+    )
+  })
 }

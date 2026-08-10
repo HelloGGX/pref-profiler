@@ -248,6 +248,36 @@ The JSON report is the contract between this tool and your AI agent or harness. 
 
 Thresholds and suggestion texts live in [`src/analyze.ts`](src/analyze.ts) and are easy to tune for your workload.
 
+### Error reports
+
+Failures always exit non-zero, and with `--json` they emit a parseable error
+document instead of ad-hoc text. This is the contract for failed commands:
+
+```json
+{
+  "schema": "perf-profiler/error@1",
+  "errorType": "spawn_failed",
+  "message": "Failed to start command: spawn ./missing ENOENT",
+  "location": "run -- ./missing",
+  "exitCode": 1,
+  "suggestion": "Check that the command exists and is executable (e.g. `command -v <cmd>`)."
+}
+```
+
+| `errorType` | Meaning |
+| --- | --- |
+| `invalid_args` | Unknown command/option or a missing option value |
+| `spawn_failed` | The profiled command could not be started |
+| `file_not_found` | A requested report file does not exist |
+| `internal` | Unexpected exception inside the CLI |
+
+Every error report answers the same three questions: `message` (what
+happened), `location` (where), and captured `stdoutTail`/`stderrTail` plus
+`suggestion` (why and what to do next). For `run`, a non-zero child exit
+keeps the normal `perf-profiler/report@1` output and attaches the captured
+output in `report.error`; child stdout/stderr are forwarded to stderr in
+`--json` mode so stdout stays machine-readable.
+
 ## Library API
 
 ### Startup profiler
