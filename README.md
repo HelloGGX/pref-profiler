@@ -2,6 +2,8 @@
 
 > Checkpoint-based performance profiler that turns timing data into actionable, AI-friendly reports.
 
+[English](README.md) | [简体中文](README-zh.md)
+
 ![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&logoColor=white)
 ![ESM](https://img.shields.io/badge/ESM-supported-4fc921)
 ![License](https://img.shields.io/badge/license-MIT-blue)
