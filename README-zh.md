@@ -10,24 +10,15 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
-**perf-profiler** 是一款零依赖的、专为 harness 与 agent 工程设计的性能分析器。它用轻量的 `perf_hooks` 检查点对管道的慢速阶段进行插桩——包括启动、查询（首 token 时间）以及无头模式下的每轮延迟——然后输出：
-
-- 一份**人类可读的时间线**，包含 RSS/堆内存快照与慢操作警告；
-- 一份**AI 友好的 JSON 报告**（`perf-profiler/report@2`），其中包含检测到的异常以及 AI agent 可以直接执行的、具体的修复建议。
-
-无遥测、无隐藏采样、无运行时依赖——只是一个精简的 ESM 包。
+**perf-profiler** 是一款零依赖的、专为 harness 与 agent 工程设计的性能分析器。它用轻量的 `perf_hooks` 检查点对管道的慢速阶段进行插桩——包括启动、查询（首 token 时间）以及无头模式下的每轮延迟——然后输出一份人类可读的时间线和一份 AI 友好的 JSON 报告（`perf-profiler/report@2`）。无遥测、无隐藏采样、无运行时依赖。
 
 ## 能检查哪些性能数据
 
-按模式列出分析器能提供的性能数据：
-
-- **启动分析器**（`PERF_PROFILE_STARTUP=1`）—— 总启动耗时、每个检查点的耗时（模块导入、settings 加载、MCP 连接、参数解析……），以及每个检查点的 RSS/堆内存快照。
-- **查询分析器**（`PERF_PROFILE_QUERY=1`）—— 首 token 时间（TTFT），拆分为本地预请求开销与网络延迟；以及各阶段耗时：上下文加载、micro/自动压缩、初始化、tool schema 构建、消息归一化、client 创建、工具执行、流式传输。
-- **无头模式分析器** —— 一次性（`-p`）模式下的每轮延迟：系统消息输出时间、query 启动时间、query 开销、首响应时间（TTFR），并带有轮次号。
-- **run 模式**（`perf run -- <命令>`）—— 墙钟耗时与退出码；在 Linux 上还包括子进程 CPU 时间、CPU 利用率（I/O 密集 vs CPU 密集）与峰值 RSS。
-- **所有模式通用** —— 带严重级别和修复建议的异常检测：慢检查点（>100ms 警告、>1000ms 严重）、已知瓶颈（tool schema / client creation / git status）、内存压力（堆 >512MB）、非零退出码。
-
-每种模式都会产出两份同样的产物：一份人类可读的时间线，和一份 AI 友好的 `perf-profiler/report@2` JSON 文档。
+- **启动** —— 总耗时、各检查点耗时（模块导入、配置加载、MCP 连接、参数解析）、RSS/堆内存快照
+- **查询** —— 首 token 时间（TTFT，拆分本地开销 vs 网络延迟）、各阶段耗时（上下文加载、工具 schema 构建、消息归一化、工具执行、流式传输）
+- **无头模式** —— 每轮延迟：系统消息输出、query 启动、query 开销、首响应时间（TTFR）
+- **命令执行** —— 墙钟耗时、退出码；Linux 上附加子进程 CPU 时间、CPU 利用率、峰值 RSS
+- **异常检测** —— 慢检查点（>100ms 警告 / >1000ms 严重）、已知瓶颈、内存压力（堆 >512MB）、非零退出码，均附修复建议
 
 ## 特性
 

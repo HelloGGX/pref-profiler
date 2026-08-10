@@ -10,24 +10,15 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
-**perf-profiler** is a zero-dependency profiler built for harness and agent engineering. It instruments slow phases of a pipeline — startup, query (time-to-first-token), and headless per-turn latency — with lightweight `perf_hooks` checkpoints, then emits:
-
-- a **human-readable timeline** with RSS/heap memory snapshots and slow-operation warnings;
-- an **AI-friendly JSON report** (`perf-profiler/report@2`) with detected anomalies and concrete fix suggestions an AI agent can act on directly.
-
-No telemetry, no hidden sampling, no runtime dependencies — just a small ESM package.
+**perf-profiler** is a zero-dependency profiler built for harness and agent engineering. It instruments slow phases of a pipeline — startup, query (time-to-first-token), and headless per-turn latency — with lightweight `perf_hooks` checkpoints, then emits a human-readable timeline and an AI-friendly JSON report (`perf-profiler/report@2`). No telemetry, no hidden sampling, no runtime dependencies.
 
 ## What You Can Measure
 
-The profiler reports the following performance data, split by mode:
-
-- **Startup profiler** (`PERF_PROFILE_STARTUP=1`) — total startup time, per-checkpoint deltas (module imports, settings loading, MCP connection, argument parsing, ...), and an RSS/heap snapshot at every checkpoint.
-- **Query profiler** (`PERF_PROFILE_QUERY=1`) — time to first token (TTFT), split into pre-request local overhead vs. network latency, plus per-phase timing for context loading, micro/autocompaction, setup, tool schema building, message normalization, client creation, tool execution, and streaming.
-- **Headless profiler** — per-turn latency in one-shot mode: time to system message, query start, query overhead, and time to first response (TTFR), tagged with the turn number.
-- **Run mode** (`perf run -- <cmd>`) — wall time and exit code; on Linux also child CPU time, CPU utilization (I/O-bound vs. CPU-bound), and peak RSS.
-- **All modes** — detected anomalies with severity and fix suggestions: slow checkpoint deltas (>100ms warning, >1000ms critical), known bottlenecks (tool schemas / client creation / git status), memory pressure (heap >512MB), and non-zero exit codes.
-
-Every mode emits the same two artifacts: a human-readable timeline and an AI-friendly `perf-profiler/report@2` JSON document.
+- **Startup** — total time, per-checkpoint deltas (module imports, settings loading, MCP connection, argument parsing), RSS/heap snapshots
+- **Query** — time to first token (TTFT, split local overhead vs. network latency), per-phase timing (context loading, tool schema building, message normalization, tool execution, streaming)
+- **Headless** — per-turn latency: system message output, query start, query overhead, time to first response (TTFR)
+- **Command execution** — wall time, exit code; on Linux also child CPU time, CPU utilization, peak RSS
+- **Anomaly detection** — slow checkpoints (>100ms warning / >1000ms critical), known bottlenecks, memory pressure (heap >512MB), non-zero exit codes, each with fix suggestions
 
 ## Features
 
