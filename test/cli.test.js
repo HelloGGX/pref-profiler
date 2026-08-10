@@ -57,7 +57,7 @@ test('demo --startup writes text and JSON reports', () => {
     const jsonPath = join(dir, 'cli-demo.json')
     assert.ok(existsSync(jsonPath))
     const report = JSON.parse(readFileSync(jsonPath, 'utf8'))
-    assert.equal(report.schema, 'perf-profiler/report@1')
+    assert.equal(report.schema, 'perf-profiler/report@2')
     assert.equal(report.mode, 'startup')
     assert.ok(report.checkpoints.length > 0)
   } finally {
@@ -86,7 +86,7 @@ test('demo --json emits a raw AI report', () => {
     const report = JSON.parse(r.stdout)
     assert.equal(report.mode, 'startup')
     assert.ok(report.checkpoints.length > 0)
-    assert.ok(Array.isArray(report.suggestions))
+    assert.ok(Array.isArray(report.anomalies))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -99,8 +99,8 @@ test('report --dir --json prints stored AI reports as raw JSON', () => {
     const r = runCli(['report', '--dir', dir, '--json'])
     assert.equal(r.status, 0)
     const parsed = JSON.parse(r.stdout.trim())
-    assert.equal(parsed.schema, 'perf-profiler/report@1')
-    assert.equal(parsed.sessionId, 'r1')
+    assert.equal(parsed.schema, 'perf-profiler/report@2')
+    assert.equal(parsed.mode, 'startup')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -148,7 +148,7 @@ test('run --json keeps stdout machine-readable and captures child output', () =>
   ])
   assert.equal(r.status, 5)
   const report = JSON.parse(r.stdout) // stdout must be pure JSON
-  assert.equal(report.schema, 'perf-profiler/report@1')
+  assert.equal(report.schema, 'perf-profiler/report@2')
   assert.equal(report.totals.exitCode, 5)
   assert.equal(report.error.errorType, 'nonzero_exit')
   assert.match(report.error.stdoutTail, /child-out/)
@@ -240,7 +240,7 @@ test('buildRunReport flags non-zero exit and CPU utilization', () => {
   assert.ok(report.anomalies.some(a => a.severity === 'critical'))
   // 10ms CPU over 100ms wall = 10% -> low utilization info anomaly.
   assert.ok(report.anomalies.some(a => a.severity === 'info'))
-  assert.match(report.summary, /finished in 100\.0ms with exit code 2/)
+  assert.equal(report.command, 'node')
   assert.equal(report.error.errorType, 'nonzero_exit')
 
   const clean = buildRunReport('node', marks, 0, 100, 0, null)

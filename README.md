@@ -13,9 +13,21 @@
 **perf-profiler** is a zero-dependency profiler built for harness and agent engineering. It instruments slow phases of a pipeline — startup, query (time-to-first-token), and headless per-turn latency — with lightweight `perf_hooks` checkpoints, then emits:
 
 - a **human-readable timeline** with RSS/heap memory snapshots and slow-operation warnings;
-- an **AI-friendly JSON report** (`perf-profiler/report@1`) with detected anomalies, ranked bottlenecks, and concrete fix suggestions an AI agent can act on directly.
+- an **AI-friendly JSON report** (`perf-profiler/report@2`) with detected anomalies and concrete fix suggestions an AI agent can act on directly.
 
 No telemetry, no hidden sampling, no runtime dependencies — just a small ESM package.
+
+## What You Can Measure
+
+The profiler reports the following performance data, split by mode:
+
+- **Startup profiler** (`PERF_PROFILE_STARTUP=1`) — total startup time, per-checkpoint deltas (module imports, settings loading, MCP connection, argument parsing, ...), and an RSS/heap snapshot at every checkpoint.
+- **Query profiler** (`PERF_PROFILE_QUERY=1`) — time to first token (TTFT), split into pre-request local overhead vs. network latency, plus per-phase timing for context loading, micro/autocompaction, setup, tool schema building, message normalization, client creation, tool execution, and streaming.
+- **Headless profiler** — per-turn latency in one-shot mode: time to system message, query start, query overhead, and time to first response (TTFR), tagged with the turn number.
+- **Run mode** (`perf run -- <cmd>`) — wall time and exit code; on Linux also child CPU time, CPU utilization (I/O-bound vs. CPU-bound), and peak RSS.
+- **All modes** — detected anomalies with severity and fix suggestions: slow checkpoint deltas (>100ms warning, >1000ms critical), known bottlenecks (tool schemas / client creation / git status), memory pressure (heap >512MB), and non-zero exit codes.
+
+Every mode emits the same two artifacts: a human-readable timeline and an AI-friendly `perf-profiler/report@2` JSON document.
 
 ## Features
 
@@ -30,6 +42,7 @@ No telemetry, no hidden sampling, no runtime dependencies — just a small ESM p
 
 - [Install](#install)
 - [Quick Start](#quick-start)
+- [What You Can Measure](#what-you-can-measure)
 - [CLI Reference](#cli-reference)
 - [AI-Friendly Reports](#ai-friendly-reports)
 - [Library API](#library-api)
@@ -166,15 +179,25 @@ perf run -- node script.js arg1       # profile a command
 
 `run` executes the command directly via `spawn(..., { shell: false })` — no shell re-parsing, and the child's exit code is propagated. On Windows, use `cmd /c` or `powershell -Command` when you need shell features or `.cmd`/`.bat` shims. Child CPU time and peak RSS are sampled from `/proc` on Linux; other platforms report `n/a (Linux only)`.
 
+### Playground
+
+A scripted playground lives in [`playground/`](playground/README.md) with one
+scenario per failure mode (spawn failure, non-zero exit, invalid arguments,
+missing files, large-output tails, demo modes). Run everything with:
+
+```bash
+npm run playground
+```
+
+or a single scenario, e.g. `bash playground/scenarios/02-run-nonzero-exit.sh`.
+
 ## AI-Friendly Reports
 
-The JSON report is the contract between this tool and your AI agent or harness. It is stable, versioned (`perf-profiler/report@1`), and includes everything needed to triage a performance issue without reading raw logs.
+The JSON report is the contract between this tool and your AI agent or harness. It is stable, versioned (`perf-profiler/report@2`), and includes everything needed to triage a performance issue without reading raw logs.
 
 ```json
 {
-  "schema": "perf-profiler/report@1",
-  "generatedAt": "2026-08-06T12:00:00.000Z",
-  "sessionId": "abc-123",
+  "schema": "perf-profiler/report@2",
   "mode": "query",
   "totals": { "totalMs": 733.7, "checkpointCount": 19 },
   "checkpoints": [
@@ -204,19 +227,6 @@ The JSON report is the contract between this tool and your AI agent or harness. 
       "reason": "Known bottleneck \"query_tool_schema_build_end\" exceeds 50ms",
       "suggestion": "Cache tool schemas or build them lazily instead of regenerating per query."
     }
-  ],
-  "bottlenecks": [
-    {
-      "name": "Network TTFB",
-      "durationMs": 171,
-      "sharePct": 23.3,
-      "suggestion": "Check endpoint latency, connection keep-alive, compression, and request timeouts."
-    }
-  ],
-  "summary": "TTFT 437.8ms: pre-request overhead 268.6ms (61.4%), network latency 169.2ms (38.6%)",
-  "suggestions": [
-    "Cache tool schemas or build them lazily instead of regenerating per query.",
-    "Check endpoint latency, connection keep-alive, compression, and request timeouts."
   ]
 }
 ```
@@ -226,11 +236,10 @@ The JSON report is the contract between this tool and your AI agent or harness. 
 | Field | Description |
 | --- | --- |
 | `checkpoints` | Per-checkpoint cumulative time, delta, and memory snapshot (detailed mode) |
-| `phases` | Semantic phases (context loading, tool schemas, network TTFB, ...) with duration and share |
+| `phases` | Semantic phases (context loading, tool schemas, network TTFB, ...) with duration and share; `start`/`end` only when derived from a checkpoint pair |
 | `anomalies` | Detected issues: severity, reason, threshold, and a concrete fix suggestion |
-| `bottlenecks` | Top 5 phases ranked by duration, each with a targeted suggestion |
-| `summary` | One-line verdict (e.g. TTFT split between local overhead and network latency) |
-| `suggestions` | Deduplicated, actionable suggestions an AI can execute in order |
+| `command` | Profiled command (run mode only) |
+| `turn` | Headless turn number (headless mode only) |
 
 ### Anomaly thresholds
 
@@ -274,7 +283,7 @@ document instead of ad-hoc text. This is the contract for failed commands:
 Every error report answers the same three questions: `message` (what
 happened), `location` (where), and captured `stdoutTail`/`stderrTail` plus
 `suggestion` (why and what to do next). For `run`, a non-zero child exit
-keeps the normal `perf-profiler/report@1` output and attaches the captured
+keeps the normal `perf-profiler/report@2` output and attaches the captured
 output in `report.error`; child stdout/stderr are forwarded to stderr in
 `--json` mode so stdout stays machine-readable.
 
@@ -359,7 +368,8 @@ Instrument                     Analyze                          Report
 profileCheckpoint(name)   →   checkpoints + phases        →   <sessionId>.txt  (human)
        │                       anomalies (severity,             <sessionId>.json (AI)
        ▼                       thresholds, suggestions)
-perf_hooks marks +        →   bottlenecks (top 5)         →   perf-profiler/report@1
+perf_hooks marks          →   checkpoints + phases +      →   perf-profiler/report@2
+                              anomalies
 memory snapshots
 ```
 

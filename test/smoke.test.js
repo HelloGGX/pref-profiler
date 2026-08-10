@@ -39,10 +39,10 @@ test('startup profiler: checkpoints + report file', async () => {
   // AI-friendly JSON report is written next to the text report.
   const jsonPath = path.replace(/\.txt$/, '.json')
   const jsonReport = JSON.parse(readFileSync(jsonPath, 'utf8'))
-  assert.equal(jsonReport.schema, 'perf-profiler/report@1')
+  assert.equal(jsonReport.schema, 'perf-profiler/report@2')
   assert.equal(jsonReport.mode, 'startup')
   assert.ok(jsonReport.checkpoints.length >= 3)
-  assert.ok(Array.isArray(jsonReport.suggestions))
+  assert.ok(Array.isArray(jsonReport.anomalies))
 
   const aiReport = startup.getStartupAiReport()
   assert.ok(aiReport)
@@ -71,8 +71,8 @@ test('query profiler: TTFT report', async () => {
   const aiReport = query.getQueryAiReport()
   assert.ok(aiReport)
   assert.equal(aiReport.mode, 'query')
-  assert.ok(aiReport.bottlenecks.length > 0)
-  assert.match(aiReport.summary, /TTFT/)
+  assert.ok(aiReport.phases.length > 0)
+  assert.ok(aiReport.phases.some(p => p.name === 'Network TTFB'))
 })
 
 test('headless profiler: per-turn metrics', async () => {

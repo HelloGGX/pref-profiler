@@ -327,7 +327,6 @@ export function getQueryAiReport(): AiReport | null {
   const apiSent = times.get('query_api_request_sent')
   const firstChunk = times.get('query_first_chunk_received')
 
-  let summaryOverride: string | undefined
   if (apiSent !== undefined && firstChunk !== undefined) {
     const networkLatency = Math.max(0, firstChunk - apiSent)
     if (networkLatency > 1000) {
@@ -349,10 +348,6 @@ export function getQueryAiReport(): AiReport | null {
         suggestion: suggestForPhase('Network TTFB'),
       })
     }
-    const preRequestPct = firstChunk > 0 ? (apiSent / firstChunk) * 100 : 0
-    summaryOverride =
-      `TTFT ${firstChunk.toFixed(1)}ms: pre-request overhead ${apiSent.toFixed(1)}ms (${preRequestPct.toFixed(1)}%), ` +
-      `network latency ${networkLatency.toFixed(1)}ms (${(100 - preRequestPct).toFixed(1)}%)`
   }
 
   return buildReport({
@@ -360,6 +355,5 @@ export function getQueryAiReport(): AiReport | null {
     checkpoints,
     phases,
     extraAnomalies,
-    summaryOverride,
   })
 }

@@ -1,5 +1,5 @@
 // Unit tests for the shared analysis pipeline: anomaly detection thresholds,
-// bottleneck ranking, suggestions, and report assembly.
+// suggestions, and report assembly.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
@@ -65,8 +65,9 @@ test('buildReport flags critical and warning deltas with suggestions', () => {
   assert.match(report.anomalies[0].reason, /exceeds 1000ms/)
   assert.equal(report.anomalies[1].severity, 'warning')
   assert.match(report.anomalies[1].reason, /exceeds 100ms/)
-  assert.ok(report.suggestions.length > 0)
-  assert.match(report.summary, /2 anomaly\(ies\) detected/)
+  assert.match(report.anomalies[0].suggestion, /Investigate/)
+  assert.equal(report.suggestions, undefined)
+  assert.equal(report.summary, undefined)
 })
 
 test('buildReport flags known bottlenecks above 50ms', () => {
@@ -107,10 +108,11 @@ test('buildReport detects heap pressure above 512MB', () => {
   const heapAnomaly = report.anomalies.find(a => a.checkpoint === 'leaky')
   assert.ok(heapAnomaly)
   assert.equal(heapAnomaly.severity, 'warning')
+  assert.equal(heapAnomaly.unit, 'MB')
   assert.match(heapAnomaly.reason, /Heap usage exceeds 512MB/)
 })
 
-test('buildReport ranks bottlenecks and excludes total_* phases', () => {
+test('buildReport passes phases through and drops derived fields', () => {
   const report = buildReport({
     mode: 'startup',
     checkpoints: [
@@ -123,16 +125,23 @@ test('buildReport ranks bottlenecks and excludes total_* phases', () => {
       { name: 'network', start: '', end: '', durationMs: 100, sharePct: 10 },
     ],
   })
-  assert.deepEqual(
-    report.bottlenecks.map(b => b.name),
-    ['import_time', 'network'],
-  )
-  assert.equal(report.bottlenecks[0].suggestion, suggestForPhase('import_time'))
+  // Phases pass through unchanged (no ranking, no total_* filtering).
+  assert.deepEqual(report.phases.map(p => p.name), [
+    'import_time',
+    'total_time',
+    'network',
+  ])
+  assert.equal(report.bottlenecks, undefined)
+  assert.equal(report.summary, undefined)
+  assert.equal(report.suggestions, undefined)
+  assert.equal(report.generatedAt, undefined)
+  assert.equal(report.sessionId, undefined)
 })
 
-test('buildReport supports run-mode totals and summary override', () => {
+test('buildReport supports run-mode totals and command', () => {
   const report = buildReport({
     mode: 'run',
+    command: 'npm test',
     checkpoints: [
       { name: 'run_start', totalMs: 0, deltaMs: 0 },
       { name: 'run_exit', totalMs: 500, deltaMs: 500 },
@@ -142,12 +151,11 @@ test('buildReport supports run-mode totals and summary override', () => {
     wallMs: 500,
     cpuMs: 120,
     exitCode: 0,
-    summaryOverride: 'custom summary',
   })
+  assert.equal(report.command, 'npm test')
   assert.equal(report.totals.exitCode, 0)
   assert.equal(report.totals.wallMs, 500)
   assert.equal(report.totals.cpuMs, 120)
-  assert.equal(report.summary, 'custom summary')
 })
 
 test('suggestForPhase maps known phases and falls back', () => {
@@ -170,6 +178,6 @@ test('jsonStringifyReport emits parseable JSON with schema', () => {
     phases: [],
   })
   const parsed = JSON.parse(jsonStringifyReport(report))
-  assert.equal(parsed.schema, 'perf-profiler/report@1')
+  assert.equal(parsed.schema, 'perf-profiler/report@2')
   assert.equal(parsed.mode, 'query')
 })

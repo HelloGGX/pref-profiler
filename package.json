@@ -28,6 +28,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "node dist/cli.js",
     "start": "node dist/cli.js",
+    "playground": "bash playground/run-all.sh",
     "prepack": "npm run build",
     "pretest": "npm run build",
     "test": "node --test"

@@ -13,9 +13,21 @@
 **perf-profiler** 是一款零依赖的、专为 harness 与 agent 工程设计的性能分析器。它用轻量的 `perf_hooks` 检查点对管道的慢速阶段进行插桩——包括启动、查询（首 token 时间）以及无头模式下的每轮延迟——然后输出：
 
 - 一份**人类可读的时间线**，包含 RSS/堆内存快照与慢操作警告；
-- 一份**AI 友好的 JSON 报告**（`perf-profiler/report@1`），其中包含检测到的异常、排序后的瓶颈以及 AI agent 可以直接执行的、具体的修复建议。
+- 一份**AI 友好的 JSON 报告**（`perf-profiler/report@2`），其中包含检测到的异常以及 AI agent 可以直接执行的、具体的修复建议。
 
 无遥测、无隐藏采样、无运行时依赖——只是一个精简的 ESM 包。
+
+## 能检查哪些性能数据
+
+按模式列出分析器能提供的性能数据：
+
+- **启动分析器**（`PERF_PROFILE_STARTUP=1`）—— 总启动耗时、每个检查点的耗时（模块导入、settings 加载、MCP 连接、参数解析……），以及每个检查点的 RSS/堆内存快照。
+- **查询分析器**（`PERF_PROFILE_QUERY=1`）—— 首 token 时间（TTFT），拆分为本地预请求开销与网络延迟；以及各阶段耗时：上下文加载、micro/自动压缩、初始化、tool schema 构建、消息归一化、client 创建、工具执行、流式传输。
+- **无头模式分析器** —— 一次性（`-p`）模式下的每轮延迟：系统消息输出时间、query 启动时间、query 开销、首响应时间（TTFR），并带有轮次号。
+- **run 模式**（`perf run -- <命令>`）—— 墙钟耗时与退出码；在 Linux 上还包括子进程 CPU 时间、CPU 利用率（I/O 密集 vs CPU 密集）与峰值 RSS。
+- **所有模式通用** —— 带严重级别和修复建议的异常检测：慢检查点（>100ms 警告、>1000ms 严重）、已知瓶颈（tool schema / client creation / git status）、内存压力（堆 >512MB）、非零退出码。
+
+每种模式都会产出两份同样的产物：一份人类可读的时间线，和一份 AI 友好的 `perf-profiler/report@2` JSON 文档。
 
 ## 特性
 
@@ -30,6 +42,7 @@
 
 - [安装](#安装)
 - [快速上手](#快速上手)
+- [能检查哪些性能数据](#能检查哪些性能数据)
 - [CLI 参考](#cli-参考)
 - [AI 友好报告](#ai-友好报告)
 - [库 API](#库-api)
@@ -161,15 +174,23 @@ perf run -- node script.js arg1       # 分析一条命令
 
 `run` 通过 `spawn(..., { shell: false })` 直接执行命令——不做 shell 重新解析，并且会透传子进程的退出码。在 Windows 上，如果需要 shell 特性或 `.cmd`/`.bat` shim，请使用 `cmd /c` 或 `powershell -Command`。子进程 CPU 时间与峰值 RSS 在 Linux 上从 `/proc` 采样；其他平台显示 `n/a (Linux only)`。
 
+### Playground
+
+[`playground/`](playground/README.md) 下有一个脚本化 playground，每个失败模式一个场景（spawn 失败、非零退出、无效参数、文件缺失、大输出截断、demo 模式）。一键运行全部场景：
+
+```bash
+npm run playground
+```
+
+或只运行单个场景，例如 `bash playground/scenarios/02-run-nonzero-exit.sh`。
+
 ## AI 友好报告
 
-JSON 报告是该工具与你的 AI agent 或 harness 之间的契约。它稳定、带版本号（`perf-profiler/report@1`），并且包含排查性能问题所需的一切，无需阅读原始日志。
+JSON 报告是该工具与你的 AI agent 或 harness 之间的契约。它稳定、带版本号（`perf-profiler/report@2`），并且包含排查性能问题所需的一切，无需阅读原始日志。
 
 ```json
 {
-  "schema": "perf-profiler/report@1",
-  "generatedAt": "2026-08-06T12:00:00.000Z",
-  "sessionId": "abc-123",
+  "schema": "perf-profiler/report@2",
   "mode": "query",
   "totals": { "totalMs": 733.7, "checkpointCount": 19 },
   "checkpoints": [
@@ -199,19 +220,6 @@ JSON 报告是该工具与你的 AI agent 或 harness 之间的契约。它稳�
       "reason": "Known bottleneck \"query_tool_schema_build_end\" exceeds 50ms",
       "suggestion": "Cache tool schemas or build them lazily instead of regenerating per query."
     }
-  ],
-  "bottlenecks": [
-    {
-      "name": "Network TTFB",
-      "durationMs": 171,
-      "sharePct": 23.3,
-      "suggestion": "Check endpoint latency, connection keep-alive, compression, and request timeouts."
-    }
-  ],
-  "summary": "TTFT 437.8ms: pre-request overhead 268.6ms (61.4%), network latency 169.2ms (38.6%)",
-  "suggestions": [
-    "Cache tool schemas or build them lazily instead of regenerating per query.",
-    "Check endpoint latency, connection keep-alive, compression, and request timeouts."
   ]
 }
 ```
@@ -221,11 +229,10 @@ JSON 报告是该工具与你的 AI agent 或 harness 之间的契约。它稳�
 | 字段 | 说明 |
 | --- | --- |
 | `checkpoints` | 每个检查点的累计时间、增量以及内存快照（详细模式） |
-| `phases` | 语义化阶段（上下文加载、工具 schema、网络 TTFB……），包含耗时与占比 |
+| `phases` | 语义化阶段（上下文加载、工具 schema、网络 TTFB……），包含耗时与占比；`start`/`end` 仅在由检查点对推导时存在 |
 | `anomalies` | 检测到的问题：严重级别、原因、阈值以及具体的修复建议 |
-| `bottlenecks` | 按耗时排序的前 5 个阶段，每个都带有针对性的建议 |
-| `summary` | 一句话结论（例如 TTFT 在本地开销与网络延迟之间的拆分） |
-| `suggestions` | 去重后的可执行建议，AI 可以按顺序执行 |
+| `command` | 被分析的命令（仅 run 模式） |
+| `turn` | headless 轮次号（仅 headless 模式） |
 
 ### 异常阈值
 
@@ -265,7 +272,7 @@ JSON 报告是该工具与你的 AI agent 或 harness 之间的契约。它稳�
 | `file_not_found` | 请求的报告文件不存在 |
 | `internal` | CLI 内部意外异常 |
 
-每份错误报告都回答同一个三连问：`message`（错误是什么）、`location`（错误在哪里）、捕获到的 `stdoutTail`/`stderrTail` 加 `suggestion`（为什么错、下一步怎么做）。对于 `run`，子进程非零退出时仍然输出正常的 `perf-profiler/report@1`，并把捕获到的子进程输出挂在 `report.error` 上；`--json` 模式下子进程的 stdout/stderr 被转发到 stderr，保证 stdout 始终是干净的机器可读输出。
+每份错误报告都回答同一个三连问：`message`（错误是什么）、`location`（错误在哪里）、捕获到的 `stdoutTail`/`stderrTail` 加 `suggestion`（为什么错、下一步怎么做）。对于 `run`，子进程非零退出时仍然输出正常的 `perf-profiler/report@2`，并把捕获到的子进程输出挂在 `report.error` 上；`--json` 模式下子进程的 stdout/stderr 被转发到 stderr，保证 stdout 始终是干净的机器可读输出。
 
 ## 库 API
 
@@ -348,8 +355,8 @@ setAnalyticsSink((event, metadata) => {
 profileCheckpoint(name)   →   checkpoints + phases        →   <sessionId>.txt  (人类可读)
        │                       anomalies (severity,             <sessionId>.json (AI)
        ▼                       thresholds, suggestions)
-perf_hooks marks +        →   bottlenecks (top 5)         →   perf-profiler/report@1
-memory snapshots
+perf_hooks marks          →   checkpoints + phases +      →   perf-profiler/report@2
+                              anomalies
 ```
 
 三种分析器共用同一条 perf_hooks 时间线（[`src/base.ts`](src/base.ts) 中的 `getPerformance()`），并馈入同一套分析管道（[`src/analyze.ts`](src/analyze.ts)），因此无论分析启动、查询还是无头轮次，输出格式都保持一致。

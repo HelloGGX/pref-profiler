@@ -3,11 +3,9 @@
  *
  * Converts raw perf_hooks marks into structured, actionable JSON that an AI
  * agent (or harness) can consume to quickly locate and fix performance
- * bottlenecks: checkpoints, phase durations, detected anomalies with
- * severity, ranked bottlenecks, and concrete suggestions.
+ * bottlenecks: checkpoints, phase durations, and detected anomalies with
+ * severity and concrete suggestions.
  */
-
-import { getSessionId } from './config.js'
 
 export type AnomalySeverity = 'critical' | 'warning' | 'info'
 
@@ -23,8 +21,10 @@ export type CheckpointInfo = {
 
 export type PhaseInfo = {
   name: string
-  start: string
-  end: string
+  /** Checkpoint names defining the phase. Omitted when the phase is not
+   * derived from a checkpoint pair (e.g. headless mode). */
+  start?: string
+  end?: string
   durationMs: number
   /** Share of total time, 0-100. */
   sharePct: number
@@ -36,6 +36,8 @@ export type Anomaly = {
   phase?: string
   durationMs: number
   thresholdMs: number
+  /** Unit for durationMs/thresholdMs. 'ms' by default; memory anomalies use 'MB'. */
+  unit?: 'ms' | 'MB'
   reason: string
   suggestion: string
 }
@@ -55,10 +57,12 @@ export type ReportErrorInfo = {
 }
 
 export type AiReport = {
-  schema: 'perf-profiler/report@1'
-  generatedAt: string
-  sessionId: string
+  schema: 'perf-profiler/report@2'
   mode: 'startup' | 'query' | 'headless' | 'run'
+  /** Command that was profiled (run mode only). */
+  command?: string
+  /** Turn number (headless mode only). */
+  turn?: number
   totals: {
     totalMs: number
     checkpointCount: number
@@ -69,14 +73,6 @@ export type AiReport = {
   checkpoints: CheckpointInfo[]
   phases: PhaseInfo[]
   anomalies: Anomaly[]
-  bottlenecks: Array<{
-    name: string
-    durationMs: number
-    sharePct: number
-    suggestion: string
-  }>
-  summary: string
-  suggestions: string[]
   /** Present only when the profiled command failed. */
   error?: ReportErrorInfo
 }
@@ -142,35 +138,28 @@ function suggestForCheckpoint(checkpointName: string): string {
 
 export type BuildReportInput = {
   mode: AiReport['mode']
+  command?: string
+  turn?: number
   checkpoints: CheckpointInfo[]
   phases: PhaseInfo[]
   totalMs?: number
   exitCode?: number
   wallMs?: number
   cpuMs?: number
-  summaryOverride?: string
   extraAnomalies?: Anomaly[]
   error?: ReportErrorInfo
 }
 
 /**
  * Build a structured AI report from checkpoints + phases, detecting anomalies
- * (slow deltas, known bottlenecks, memory pressure) and ranking bottlenecks
- * with concrete suggestions.
+ * (slow deltas, known bottlenecks, memory pressure) with concrete suggestions.
  */
 export function buildReport(input: BuildReportInput): AiReport {
-  const {
-    mode,
-    checkpoints,
-    phases,
-    extraAnomalies = [],
-    summaryOverride,
-  } = input
+  const { mode, checkpoints, phases, extraAnomalies = [] } = input
   const last = checkpoints.at(-1)
   const totalMs = input.totalMs ?? last?.totalMs ?? 0
 
   const anomalies: Anomaly[] = [...extraAnomalies]
-  const suggestions = new Set<string>()
 
   // Delta-based anomaly detection. The first checkpoint measures time since
   // process start, so it is not flagged.
@@ -206,7 +195,6 @@ export function buildReport(input: BuildReportInput): AiReport {
               : `Known bottleneck "${cp.name}" exceeds ${KNOWN_BOTTLENECK_MS}ms`,
         suggestion,
       })
-      suggestions.add(suggestion)
     }
   }
 
@@ -225,43 +213,15 @@ export function buildReport(input: BuildReportInput): AiReport {
       thresholdMs: MEMORY_WARN_BYTES / (1024 * 1024),
       reason: `Heap usage exceeds ${MEMORY_WARN_BYTES / (1024 * 1024)}MB`,
       suggestion,
+      unit: 'MB',
     })
-    suggestions.add(suggestion)
   }
 
-  // Rank bottlenecks: longest phases first. Whole-run phases (e.g.
-  // "total_time") cover nearly the full span and carry no localization value,
-  // so they are excluded from the ranking.
-  const sortedPhases = phases
-    .filter(p => !/^total_/i.test(p.name))
-    .sort((a, b) => b.durationMs - a.durationMs)
-  const bottlenecks = sortedPhases.slice(0, 5).map(p => {
-    const suggestion = suggestForPhase(p.name)
-    suggestions.add(suggestion)
-    return {
-      name: p.name,
-      durationMs: p.durationMs,
-      sharePct: p.sharePct,
-      suggestion,
-    }
-  })
-
-  const top = bottlenecks[0]
-  const summary =
-    summaryOverride ??
-    `Total ${totalMs.toFixed(1)}ms across ${checkpoints.length} checkpoints` +
-      (top
-        ? `; top phase "${top.name}" took ${top.durationMs.toFixed(1)}ms (${top.sharePct.toFixed(1)}% of total)`
-        : '') +
-      (anomalies.length > 0
-        ? `; ${anomalies.length} anomaly(ies) detected`
-        : '; no anomalies detected')
-
   return {
-    schema: 'perf-profiler/report@1',
-    generatedAt: new Date().toISOString(),
-    sessionId: getSessionId(),
+    schema: 'perf-profiler/report@2',
     mode,
+    ...(input.command !== undefined ? { command: input.command } : {}),
+    ...(input.turn !== undefined ? { turn: input.turn } : {}),
     totals: {
       totalMs,
       checkpointCount: checkpoints.length,
@@ -272,9 +232,6 @@ export function buildReport(input: BuildReportInput): AiReport {
     checkpoints,
     phases,
     anomalies,
-    bottlenecks,
-    summary,
-    suggestions: [...suggestions],
     ...(input.error ? { error: input.error } : {}),
   }
 }

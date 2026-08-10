@@ -622,20 +622,15 @@ export function buildRunReport(
       })
     }
   }
-  const summaryOverride =
-    `Command "${command}" finished in ${wallMs.toFixed(1)}ms with exit code ${exitCode}` +
-    (sample
-      ? `; child CPU ${sample.cpuMs.toFixed(1)}ms, peak RSS ${formatFileSize(sample.peakRssBytes)}`
-      : '')
   return buildReport({
     mode: 'run',
+    command,
     checkpoints,
     phases: [],
     wallMs,
     cpuMs: sample?.cpuMs,
     exitCode,
     extraAnomalies: anomalies,
-    summaryOverride,
     error,
   })
 }

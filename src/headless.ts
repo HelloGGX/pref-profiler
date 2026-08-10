@@ -224,8 +224,6 @@ export function getHeadlessAiReport(): AiReport | null {
     if (typeof durationMs === 'number') {
       phases.push({
         name,
-        start: '',
-        end: '',
         durationMs,
         sharePct: referenceMs > 0 ? (durationMs / referenceMs) * 100 : 0,
       })
@@ -270,17 +268,11 @@ export function getHeadlessAiReport(): AiReport | null {
     })
   }
 
-  const summaryOverride =
-    `Turn ${metrics.turn_number}: time to first response ${typeof ttfr === 'number' ? ttfr : 'n/a'}ms` +
-    (typeof overhead === 'number'
-      ? `, query overhead ${overhead}ms`
-      : '')
-
   return buildReport({
     mode: 'headless',
+    turn: typeof metrics.turn_number === 'number' ? metrics.turn_number : undefined,
     checkpoints,
     phases,
     extraAnomalies: anomalies,
-    summaryOverride,
   })
 }

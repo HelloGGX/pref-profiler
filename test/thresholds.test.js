@@ -95,7 +95,7 @@ test('query AI report flags network latency above 300ms', async () => {
   const network = ai.anomalies.find(a => a.phase === 'Network TTFB')
   assert.ok(network, 'expected a Network TTFB anomaly')
   assert.equal(network.severity, 'warning')
-  assert.match(ai.summary, /TTFT/)
+  assert.equal(ai.mode, 'query')
 })
 
 test('query AI report flags network latency above 1000ms as critical', async () => {
